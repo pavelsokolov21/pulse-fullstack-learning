@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Окружение и секреты
+.venv/
+.env
+.env.*
+!.env.example
+
+# Кеши инструментов
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Локальные данные
+*.db
+*.sqlite3
