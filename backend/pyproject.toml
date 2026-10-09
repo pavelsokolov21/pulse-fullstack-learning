@@ -36,3 +36,11 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["src/**/tests"]
+
+[tool.pytest-watcher]
+now = true
+clear = true
+runner = ".venv/bin/python"
+runner_args = ["-m", "pytest"]
