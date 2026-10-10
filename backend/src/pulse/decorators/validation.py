@@ -35,6 +35,37 @@ def validate_not_empty(argument_name: str, message: str | None = None):
     return decorator
 
 
+def validate_trimmed_not_empty(argument_name: str, message: str | None = None):
+
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        sig = inspect.signature(func)
+
+        if argument_name not in sig.parameters:
+            raise ValueError(f"У {func.__name__} нет аргумента '{argument_name}'")
+
+        @wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            arg_value = bound.arguments[argument_name]
+
+            if arg_value is None and args:
+                arg_value = args[0]
+
+            if isinstance(arg_value, str):
+                arg_value = arg_value.strip()
+
+            if not arg_value:
+                error_msg = message or f"Ошибка: аргумент '{argument_name}' пуст!"
+                raise ValueError(error_msg)
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 def validate_range(
     argument_name: str,
     range: tuple[float | None, float | None] = (None, None),
