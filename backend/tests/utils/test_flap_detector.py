@@ -1,6 +1,6 @@
 import pytest
 
-from pulse.utils.flap_detector import FlapDetector
+from pulse.utils.flap_detector import FlapDetector, Status
 
 OK, FAIL = True, False
 
@@ -14,16 +14,28 @@ def test_initial_status_is_up() -> None:
 
 
 @pytest.mark.parametrize(
-    "fail_threshold,recover_threshold",
+    ("fail_threshold", "recover_threshold"),
     [(0, 2), (3, 0), (-1, 2), (3, -1)],
 )
 def test_invalid_thresholds(fail_threshold: int, recover_threshold: int) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="threshold"):
         FlapDetector(fail_threshold, recover_threshold)
 
 
 @pytest.mark.parametrize(
-    "n,m,results,expected",
+    ("fail_threshold", "recover_threshold"),
+    [(1.5, 2), (3, 1.5), (True, 2), (3, False), (float("nan"), 2), (2.0, 2)],
+)
+def test_non_integer_thresholds(
+    fail_threshold: object, recover_threshold: object
+) -> None:
+    # Дробный порог никогда не совпал бы со счётчиком, детектор не ушёл бы в DOWN.
+    with pytest.raises(TypeError):
+        FlapDetector(fail_threshold, recover_threshold)  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.parametrize(
+    ("n", "m", "results", "expected"),
     [
         pytest.param(3, 2, [FAIL] * 3, ["up", "up", "down"], id="down-after-n-fails"),
         pytest.param(1, 1, [FAIL], ["down"], id="threshold-one"),
@@ -71,9 +83,23 @@ def test_status_sequence(
     assert run(FlapDetector(n, m), results) == expected
 
 
-def test_record_returns_current_status() -> None:
+def test_record_returns_new_status_after_transition() -> None:
     detector = FlapDetector(1, 1)
-    assert detector.record(ok=False) == detector.status
+
+    assert detector.record(ok=False) is Status.DOWN
+    assert detector.status is Status.DOWN
+
+
+def test_default_thresholds() -> None:
+    detector = FlapDetector()
+
+    assert run(detector, [FAIL] * 3 + [OK] * 2) == [
+        "up",
+        "up",
+        "down",
+        "down",
+        "up",
+    ]
 
 
 def test_instances_do_not_share_state() -> None:

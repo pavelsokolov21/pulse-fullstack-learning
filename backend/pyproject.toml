@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Pavel Sokolov", email = "pavlik.sokolov.2000@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.13.5",
@@ -32,12 +32,14 @@ dev = [
 typeCheckingMode = "strict"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "A", "RUF", "SIM", "PT"]
+# Кириллица в строках и комментариях: «а», «о», «с» похожи на латинские буквы.
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-pythonpath = ["src"]
-testpaths = ["src/**/tests"]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]
 
 [tool.pytest-watcher]
 now = true
