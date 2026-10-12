@@ -33,6 +33,12 @@ def _validate_argument(
 
             return func(*args, **kwargs)
 
+        # wrapper синхронный и просто возвращает корутину, поэтому для
+        # inspect.iscoroutinefunction (его использует FastAPI, pytest-asyncio)
+        # он выглядел бы обычной функцией. Помечаем его явно.
+        if inspect.iscoroutinefunction(func):
+            inspect.markcoroutinefunction(wrapper)
+
         return wrapper
 
     return decorator

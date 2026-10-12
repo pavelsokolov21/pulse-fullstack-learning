@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 from pulse.decorators.validation import (
@@ -176,3 +178,51 @@ def test_range_integer_flag_rejects_float() -> None:
         func(1.5)
     with pytest.raises(TypeError):
         func(2.0)
+
+
+# --- async-функции --------------------------------------------------------
+
+
+def test_decorators_keep_coroutine_function() -> None:
+    # Фреймворки (FastAPI, pytest-asyncio) решают по inspect.iscoroutinefunction,
+    # как вызывать функцию: обёртка не должна прятать, что это корутина.
+    @validate_not_empty("value")
+    async def not_empty(value: object) -> object:
+        return value
+
+    @validate_trimmed_not_empty("value")
+    async def trimmed(value: object) -> object:
+        return value
+
+    @validate_range("value", min_value=0)
+    async def in_range(value: object) -> object:
+        return value
+
+    assert inspect.iscoroutinefunction(not_empty)
+    assert inspect.iscoroutinefunction(trimmed)
+    assert inspect.iscoroutinefunction(in_range)
+
+
+def test_decorated_sync_function_is_not_coroutine_function() -> None:
+    @validate_not_empty("value")
+    def func(value: object) -> object:
+        return value
+
+    assert not inspect.iscoroutinefunction(func)
+
+
+async def test_decorated_coroutine_returns_result_when_awaited() -> None:
+    @validate_range("n", min_value=1)
+    async def func(n: object) -> str:
+        return "done"
+
+    assert await func(2) == "done"
+
+
+async def test_decorated_coroutine_validates_arguments() -> None:
+    @validate_range("n", min_value=1)
+    async def func(n: object) -> str:
+        return "done"
+
+    with pytest.raises(ValueError, match="'n'"):
+        await func(0)
