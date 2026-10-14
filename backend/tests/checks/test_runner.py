@@ -2,12 +2,10 @@ import asyncio
 import inspect
 import time
 from collections.abc import Callable, Coroutine
-from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from pulse.checks import runner
 from pulse.checks.runner import check_many, check_url
 
 URL = "https://example.com"
@@ -115,9 +113,7 @@ async def test_check_url_measures_latency_in_milliseconds(
     monkeypatch: pytest.MonkeyPatch, handler: Handler
 ) -> None:
     ticks = iter([1.0, 1.25])
-    monkeypatch.setattr(
-        runner, "time", SimpleNamespace(perf_counter=lambda: next(ticks))
-    )
+    monkeypatch.setattr("pulse.utils.timer.perf_counter", lambda: next(ticks))
 
     async with make_client(handler) as client:
         result = await check_url(client, URL)
@@ -147,7 +143,8 @@ async def test_results_keep_input_order() -> None:
     # Первый URL отвечает дольше всех, последний быстрее всех:
     # порядок завершения обратный порядку входа.
     delays = {"slow.test": 0.05, "mid.test": 0.02, "fast.test": 0.0}
-    urls = [f"https://{host}/" for host in delays]
+    # Уже нормализованные URL: тест про порядок, а не про нормализацию.
+    urls = [f"https://{host}" for host in delays]
 
     async def handler(request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(delays[request.url.host])
@@ -322,7 +319,7 @@ async def test_empty_urls_return_empty_list() -> None:
 
 
 async def test_check_many_accepts_any_sequence() -> None:
-    urls = ("https://a.test/", "https://b.test/")
+    urls = ("https://a.test", "https://b.test")
 
     async with make_client(respond(200)) as client:
         results = await check_many(client, urls)
@@ -356,7 +353,7 @@ async def test_check_url_raises_value_error_for_garbage_url() -> None:
             await check_url(client, "")
 
 
-async def test_check_url_adds_scheme_and_keeps_original_url() -> None:
+async def test_check_url_returns_normalized_url() -> None:
     requested: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -364,10 +361,12 @@ async def test_check_url_adds_scheme_and_keeps_original_url() -> None:
         return httpx.Response(200)
 
     async with make_client(handler) as client:
-        result = await check_url(client, "Example.com")
+        result = await check_url(client, "Example.com/")
 
+    # Схема добавлена, регистр хоста и хвостовой «/» нормализованы: запрос
+    # уходит на этот адрес, и в результате лежит тот же адрес.
     assert requested == ["https://example.com"]
-    assert result.url == "Example.com"
+    assert result.url == "https://example.com"
     assert result.ok is True
 
 
@@ -390,7 +389,14 @@ async def test_garbage_url_does_not_break_batch_and_is_not_retried() -> None:
     async with make_client(handler) as client:
         results = await check_many(client, urls, retries=3, retry_delay=0)
 
-    assert [r.url for r in results] == urls
+    # Валидные URL приходят в результат нормализованными, а мусорные остаются
+    # как переданы: нормализовать их нельзя.
+    assert [r.url for r in results] == [
+        "https://a.test",
+        "",
+        "http://\x00.com",
+        "https://b.test",
+    ]
     assert [r.ok for r in results] == [True, False, False, True]
     for bad in (results[1], results[2]):
         assert bad.status_code is None

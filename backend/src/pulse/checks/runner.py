@@ -1,5 +1,4 @@
 import asyncio
-import time
 from collections.abc import Sequence
 
 import httpx
@@ -7,6 +6,7 @@ import httpx
 from pulse.checks.models import CheckResult
 from pulse.decorators.validation import validate_range
 from pulse.utils.normalize_url import normalize_url
+from pulse.utils.timer import timed
 
 
 async def check_url(client: httpx.AsyncClient, url: str) -> CheckResult:
@@ -18,22 +18,22 @@ async def check_url(client: httpx.AsyncClient, url: str) -> CheckResult:
     """
     target = normalize_url(url)
 
-    start = time.perf_counter()
     status_code: int | None = None
     error: str | None = None
 
-    try:
-        response = await client.get(target, follow_redirects=True)
-        status_code = response.status_code
-    except httpx.InvalidURL as exc:
-        raise ValueError(str(exc)) from exc
-    except httpx.HTTPError as exc:
-        error = f"Network Error: {type(exc).__name__}"
+    with timed() as t:
+        try:
+            response = await client.get(target, follow_redirects=True)
+            status_code = response.status_code
+        except httpx.InvalidURL as exc:
+            raise ValueError(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            error = f"Network Error: {type(exc).__name__}"
 
-    latency_ms = (time.perf_counter() - start) * 1000
+    latency_ms = t.elapsed_ms
 
     return CheckResult(
-        url=url,
+        url=target,
         status_code=status_code,
         latency_ms=latency_ms,
         error=error,

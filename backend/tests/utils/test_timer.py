@@ -3,8 +3,8 @@ from contextlib import AbstractContextManager
 
 import pytest
 
-import pulse.utils.timed as timed_module
-from pulse.utils.timed import Timed, TimeTracker, timed
+import pulse.utils.timer as timer_module
+from pulse.utils.timer import Timed, TimeTracker, timed
 
 TimerFactory = Callable[[], AbstractContextManager[TimeTracker]]
 
@@ -16,9 +16,9 @@ both_variants = pytest.mark.parametrize(
 
 
 def fake_clock(monkeypatch: pytest.MonkeyPatch, *ticks: float) -> None:
-    """Каждый вызов perf_counter внутри timed.py отдаёт следующее значение."""
+    """Каждый вызов perf_counter внутри timer.py отдаёт следующее значение."""
     values = iter(ticks)
-    monkeypatch.setattr(timed_module, "perf_counter", lambda: next(values))
+    monkeypatch.setattr(timer_module, "perf_counter", lambda: next(values))
 
 
 @both_variants
@@ -100,3 +100,10 @@ def test_real_clock_gives_non_negative_elapsed(make_timer: TimerFactory) -> None
         pass
 
     assert tracker.elapsed_ms >= 0.0
+
+
+def test_exit_without_enter_raises() -> None:
+    # Через `with` такого не бывает, но ручной вызов должен падать громко,
+    # а не молча считать время «с нуля».
+    with pytest.raises(RuntimeError, match="без __enter__"):
+        Timed().__exit__(None, None, None)

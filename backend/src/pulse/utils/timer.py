@@ -25,7 +25,7 @@ class Timed:
         self._start = 0.0
         self.tracker: TimeTracker | None = None
 
-    def __enter__(self):
+    def __enter__(self) -> TimeTracker:
         self.tracker = TimeTracker()
         self._start = perf_counter()
 
@@ -36,6 +36,12 @@ class Timed:
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
-    ):
+    ) -> None:
         end = perf_counter()
+
+        # Через `with` __exit__ всегда идёт после __enter__. Явная проверка
+        # сужает тип до TimeTracker и громко падает при ручном вызове.
+        if self.tracker is None:
+            raise RuntimeError("Timed.__exit__ вызван без __enter__")
+
         self.tracker.elapsed_ms = (end - self._start) * 1000
