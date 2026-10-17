@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Sequence
+from itertools import batched
 
 import httpx
 
@@ -78,3 +79,21 @@ async def check_many(
         tasks = [tg.create_task(worker(url)) for url in urls]
 
     return [task.result() for task in tasks]
+
+
+@validate_range(argument_name="concurrency", min_value=1, integer=True)
+@validate_range(argument_name="batch_size", min_value=1, integer=True)
+async def check_in_batches(
+    client: httpx.AsyncClient,
+    urls: Sequence[str],
+    *,
+    batch_size: int = 20,
+    concurrency: int = 10,
+) -> list[CheckResult]:
+    results: list[CheckResult] = []
+
+    for chunk_urls in batched(urls, batch_size):
+        result = await check_many(client, chunk_urls, concurrency=concurrency)
+        results.extend(result)
+
+    return results

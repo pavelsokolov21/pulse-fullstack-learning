@@ -6,7 +6,8 @@ from collections.abc import Callable, Coroutine
 import httpx
 import pytest
 
-from pulse.checks.runner import check_many, check_url
+from pulse.checks.models import CheckResult
+from pulse.checks.runner import check_in_batches, check_many, check_url
 
 URL = "https://example.com"
 
@@ -420,3 +421,169 @@ async def test_unexpected_error_in_one_check_is_raised_as_exception_group() -> N
 
     # TaskGroup оборачивает исключение в группу: `except RuntimeError` его не поймает.
     assert exc_info.group_contains(RuntimeError, match="bug in handler")
+
+
+# --- check_in_batches ------------------------------------------------------
+
+
+def site_urls(count: int) -> list[str]:
+    # Уже нормализованные URL: CheckResult.url совпадает со входом.
+    return [f"https://site{i}.test" for i in range(count)]
+
+
+class Tracker:
+    """Считает, сколько запросов одновременно в полёте."""
+
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def handler(self, request: httpx.Request) -> httpx.Response:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.01)
+        self.in_flight -= 1
+        return httpx.Response(200)
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 3, 5, 100])
+async def test_check_in_batches_returns_flat_list_in_input_order(
+    batch_size: int,
+) -> None:
+    urls = site_urls(5)
+
+    async with make_client(respond(200)) as client:
+        results = await check_in_batches(client, urls, batch_size=batch_size)
+
+    # Плоский список CheckResult (а не список пачек), порядок как на входе.
+    assert [type(r) for r in results] == [CheckResult] * 5
+    assert [r.url for r in results] == urls
+    assert all(r.ok for r in results)
+
+
+async def test_check_in_batches_accepts_tuple() -> None:
+    urls = tuple(site_urls(3))
+
+    async with make_client(respond(200)) as client:
+        results = await check_in_batches(client, urls, batch_size=2)
+
+    assert [r.url for r in results] == list(urls)
+
+
+async def test_check_in_batches_of_empty_input_makes_no_requests() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200)
+
+    async with make_client(handler) as client:
+        results = await check_in_batches(client, [])
+
+    assert results == []
+    assert calls == 0
+
+
+async def test_batch_size_limits_requests_in_flight() -> None:
+    tracker = Tracker()
+
+    async with make_client(tracker.handler) as client:
+        await check_in_batches(client, site_urls(5), batch_size=2, concurrency=10)
+
+    # Ровно batch_size, а не «не больше»: иначе тест пройдёт и на последовательном
+    # коде.
+    assert tracker.max_in_flight == 2
+
+
+async def test_concurrency_limits_requests_in_flight_inside_a_batch() -> None:
+    tracker = Tracker()
+
+    async with make_client(tracker.handler) as client:
+        await check_in_batches(client, site_urls(6), batch_size=6, concurrency=2)
+
+    assert tracker.max_in_flight == 2
+
+
+async def test_effective_parallelism_is_min_of_batch_size_and_concurrency() -> None:
+    # batch_size меньше concurrency ограничивает параллелизм сильнее, чем он.
+    tracker = Tracker()
+
+    async with make_client(tracker.handler) as client:
+        await check_in_batches(client, site_urls(4), batch_size=1, concurrency=10)
+
+    assert tracker.max_in_flight == 1
+
+
+async def test_next_batch_starts_only_after_previous_batch_finished() -> None:
+    finished: set[str] = set()
+    finished_when_started: dict[str, set[str]] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        finished_when_started[host] = set(finished)
+        # Первый URL самый медленный: вторая пачка не должна его обгонять.
+        await asyncio.sleep(0.03 if host == "site0.test" else 0.0)
+        finished.add(host)
+        return httpx.Response(200)
+
+    async with make_client(handler) as client:
+        await check_in_batches(client, site_urls(4), batch_size=2, concurrency=10)
+
+    # site1 из той же пачки стартовал, не дожидаясь site0.
+    assert finished_when_started["site1.test"] == set()
+    # site2 из второй пачки стартовал, когда первая пачка уже закончилась.
+    assert finished_when_started["site2.test"] == {"site0.test", "site1.test"}
+
+
+async def test_garbage_url_in_one_batch_does_not_break_other_batches() -> None:
+    urls = ["https://a.test", "", "https://b.test", "https://c.test"]
+
+    async with make_client(respond(200)) as client:
+        results = await check_in_batches(client, urls, batch_size=2)
+
+    assert [r.ok for r in results] == [True, False, True, True]
+    assert results[1].error is not None
+    assert results[1].error.startswith("Invalid URL")
+
+
+async def test_unexpected_error_stops_remaining_batches() -> None:
+    started: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        started.append(request.url.host)
+        if request.url.host == "site2.test":
+            raise RuntimeError("bug in handler")
+        return httpx.Response(200)
+
+    async with make_client(handler) as client:
+        with pytest.raises(ExceptionGroup) as exc_info:
+            await check_in_batches(client, site_urls(5), batch_size=2)
+
+    assert exc_info.group_contains(RuntimeError, match="bug in handler")
+    # Третья пачка (site4) не стартовала, результаты первой пачки пропали вместе
+    # с исключением: функция возвращает результат только целиком.
+    assert "site4.test" not in started
+
+
+@pytest.mark.parametrize("batch_size", [0, -1])
+async def test_non_positive_batch_size_raises(batch_size: int) -> None:
+    async with make_client(respond(200)) as client:
+        with pytest.raises(ValueError, match="batch_size"):
+            await check_in_batches(client, site_urls(2), batch_size=batch_size)
+
+
+async def test_non_integer_batch_size_raises() -> None:
+    async with make_client(respond(200)) as client:
+        with pytest.raises(TypeError, match="batch_size"):
+            await check_in_batches(
+                client,
+                site_urls(2),
+                batch_size=2.5,  # pyright: ignore[reportArgumentType]
+            )
+
+
+async def test_non_positive_concurrency_raises() -> None:
+    async with make_client(respond(200)) as client:
+        with pytest.raises(ValueError, match="concurrency"):
+            await check_in_batches(client, site_urls(2), concurrency=0)
