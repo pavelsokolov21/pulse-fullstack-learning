@@ -39,8 +39,6 @@ class Timed:
     ) -> None:
         end = perf_counter()
 
-        # Через `with` __exit__ всегда идёт после __enter__. Явная проверка
-        # сужает тип до TimeTracker и громко падает при ручном вызове.
         if self.tracker is None:
             raise RuntimeError("Timed.__exit__ вызван без __enter__")
 
