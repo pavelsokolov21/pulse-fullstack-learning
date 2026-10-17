@@ -51,7 +51,17 @@ def get_host_meta(results: Sequence[CheckResult]) -> HostMeta:
     return HostMeta(total=total, failed=failed)
 
 
-def _p95(results: Sequence[CheckResult]) -> float | None:
+def get_failure_rate(results: Sequence[CheckResult]) -> float | None:
+    """Доля сбоев от 0.0 до 1.0 по всем проверкам, `None` для пустого входа.
+
+    Сбоем считается и сетевая ошибка, и ответ вне 2xx/3xx.
+    """
+    host_meta = get_host_meta(results)
+
+    return host_meta.failed / host_meta.total if host_meta.total else None
+
+
+def get_p95(results: Sequence[CheckResult]) -> float | None:
     """p95 задержки по проверкам с ответом, `None`, если ответов нет совсем."""
     latencies = [res.latency_ms for res in _with_response(results)]
 
@@ -77,7 +87,7 @@ def summarize(results: Sequence[CheckResult]) -> list[HostStats]:
                 failed=host_meta.failed,
                 # Группа не бывает пустой, поэтому total > 0.
                 failure_rate=host_meta.failed / host_meta.total,
-                p95=_p95(results_by_host),
+                p95=get_p95(results_by_host),
             )
         )
 

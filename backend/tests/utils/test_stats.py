@@ -3,6 +3,7 @@ import pytest
 from pulse.checks.models import CheckResult, HostMeta
 from pulse.utils.stats import (
     failure_rate_by_host,
+    get_failure_rate,
     get_host_meta,
     group_by_host,
     p95_by_host,
@@ -166,6 +167,31 @@ def test_get_host_meta_counts_total_and_failures() -> None:
 
 def test_get_host_meta_of_empty_input() -> None:
     assert get_host_meta([]) == HostMeta(total=0, failed=0)
+
+
+# --- get_failure_rate ------------------------------------------------------
+
+
+def test_get_failure_rate_is_none_for_empty_input() -> None:
+    # None, а не 0.0: данных нет, а «0 сбоев» означало бы «всё хорошо».
+    assert get_failure_rate([]) is None
+
+
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ([200, 204], 0.0),
+        ([500, None], 1.0),
+        ([200, 500, None], 2 / 3),
+        ([301], 0.0),
+    ],
+)
+def test_get_failure_rate_counts_network_errors_and_bad_responses(
+    statuses: list[int | None], expected: float
+) -> None:
+    results = [result("http://a.test/", status) for status in statuses]
+
+    assert get_failure_rate(results) == pytest.approx(expected)
 
 
 # --- failure_rate_by_host --------------------------------------------------
