@@ -1,0 +1,8 @@
+[[monitors]]
+url = "example.com"
+interval = "5m"
+timeout = 10
+
+[[monitors]]
+url = "https://api.example.com/health"
+interval = "30s"

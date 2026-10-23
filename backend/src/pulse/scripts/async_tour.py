@@ -32,7 +32,7 @@ async def run_task_1() -> list[CheckResult | BaseException]:
 
 
 async def run_test_2() -> list[CheckResult | BaseException]:
-    tasks = []
+    tasks: list[asyncio.Task[CheckResult]] = []
 
     try:
         async with asyncio.TaskGroup() as tg:
@@ -42,12 +42,12 @@ async def run_test_2() -> list[CheckResult | BaseException]:
     except* RuntimeError as eg:
         print(f"TaskGroup поймал исключения: {eg.exceptions}")
 
-    res = []
+    res: list[CheckResult | BaseException] = []
     for t in tasks:
         if t.cancelled():
             res.append(asyncio.CancelledError("Task was cancelled by TaskGroup"))
-        elif t.exception():
-            res.append(t.exception())
+        elif (exc := t.exception()) is not None:
+            res.append(exc)
         else:
             res.append(t.result())
 
@@ -101,6 +101,9 @@ async def run_task_4() -> None:
     start = perf_counter()
 
     async for fut in asyncio.as_completed(tasks):
+        # Асинхронная итерация отдаёт исходные задачи (не просто результаты),
+        # поэтому у них есть имя. В типах as_completed это Future, сужаем до Task.
+        assert isinstance(fut, asyncio.Task)
         host = fut.get_name()
         try:
             res = await fut
