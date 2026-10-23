@@ -92,20 +92,20 @@ Oct 5, 2026 · @Pavel
 
 **Теория (2 ч)**
 
-- [ ] `with` и протокол `__enter__` / `__exit__`, `contextlib.contextmanager`, `async with`
-- [ ] Данные: comprehensions, `collections` (`defaultdict`, `Counter`, `deque`), `itertools` (`batched`, `islice`)
-- [ ] Инструменты asyncio: `gather` против `TaskGroup`, `asyncio.timeout`, `as_completed`, `Queue`, `ExceptionGroup` и `except*`
+- [x] `with` и протокол `__enter__` / `__exit__`, `contextlib.contextmanager`, `async with`
+- [x] Данные: comprehensions, `collections` (`defaultdict`, `Counter`, `deque`), `itertools` (`batched`, `islice`)
+- [x] Инструменты asyncio: `gather` против `TaskGroup`, `asyncio.timeout`, `as_completed`, `Queue`, `ExceptionGroup` и `except*`
 
 **Практика (5 ч)**
 
-- [ ] Менеджеры контекста: `timed()` через `@contextmanager` и класс с `__enter__` / `__exit__`; тест, что `__exit__` вызывается при исключении
-- [ ] Обработка данных на списке `CheckResult`: топ-3 самых медленных, группировка по хосту (`defaultdict`, `Counter`), доля неудач и p95 по каждому хосту
-- [ ] `itertools.batched` (пачки по 20 URL) и `deque(maxlen=N)` как скользящее окно замеров
-- [ ] Асинхронные задачи: `gather(return_exceptions=True)` против `TaskGroup` с `except*` (пять проверок, одна падает), общий дедлайн через `asyncio.timeout`, вывод результатов по мере готовности через `as_completed`, три воркера на `asyncio.Queue`
+- [x] Менеджеры контекста: `timed()` через `@contextmanager` и класс с `__enter__` / `__exit__`; тест, что `__exit__` вызывается при исключении
+- [x] Обработка данных на списке `CheckResult`: топ-3 самых медленных, группировка по хосту (`defaultdict`, `Counter`), доля неудач и p95 по каждому хосту
+- [x] `itertools.batched` (пачки по 20 URL) и `deque(maxlen=N)` как скользящее окно замеров
+- [x] Асинхронные задачи: `gather(return_exceptions=True)` против `TaskGroup` с `except*` (пять проверок, одна падает), общий дедлайн через `asyncio.timeout`, вывод результатов по мере готовности через `as_completed`, три воркера на `asyncio.Queue`
 
 **Заметка (1 ч)**
 
-- [ ] Таблица «ситуация → инструмент» для асинхронных задач своими словами и что в этой неделе похоже на JS, а что принципиально иначе
+- [x] Таблица «ситуация → инструмент» для асинхронных задач своими словами и что в этой неделе похоже на JS, а что принципиально иначе
 
 ### Неделя 4. Pydantic v2, pytest и CLI
 
