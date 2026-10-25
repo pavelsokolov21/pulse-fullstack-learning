@@ -1,8 +1,8 @@
 [[monitors]]
-url = "example.com"
+url = "https://vk.com"
 interval = "5m"
 timeout = 10
 
 [[monitors]]
-url = "https://api.example.com/health"
+url = "https://www.youtube.com"
 interval = "30s"
