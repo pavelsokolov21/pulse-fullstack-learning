@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from pydantic import ValidationError
 
-from pulse.monitors.models import MonitorConfig, MonitorCreate
+from pulse.monitors.models import MonitorConfig
 
 
 def make(**overrides: object) -> MonitorConfig:
@@ -71,6 +71,14 @@ def test_interval_accepts_ready_timedelta() -> None:
     assert make(interval=timedelta(minutes=2)).interval == timedelta(minutes=2)
 
 
+@pytest.mark.parametrize("interval", [timedelta(0), timedelta(seconds=-1)])
+def test_non_positive_timedelta_is_rejected(interval: timedelta) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        make(interval=interval)
+
+    assert error_types(exc_info) == [("interval", "value_error")]
+
+
 def test_numeric_interval_is_read_as_seconds() -> None:
     # Это lax-режим Pydantic, а не наше решение: `interval = 300` в TOML молча
     # станет 300 секундами, хотя строки требуют единицу ("5m"). Если такое
@@ -78,12 +86,35 @@ def test_numeric_interval_is_read_as_seconds() -> None:
     assert make(interval=300).interval == timedelta(seconds=300)
 
 
-@pytest.mark.parametrize("interval", ["0s", "abc", "1.5h", "PT5M", "5", ""])
-def test_invalid_interval_is_rejected(interval: str) -> None:
+@pytest.mark.parametrize(
+    "interval",
+    [
+        "0s",
+        "abc",
+        "1.5h",
+        "PT5M",
+        "5",
+        "",
+        0,
+        -5,
+        -0.5,
+        True,
+        False,
+    ],
+)
+def test_invalid_interval_is_rejected(interval: object) -> None:
     with pytest.raises(ValidationError) as exc_info:
         make(interval=interval)
 
     assert error_types(exc_info) == [("interval", "value_error")]
+
+
+@pytest.mark.parametrize("interval", [float("nan"), float("inf"), 1e30])
+def test_non_finite_or_huge_numeric_interval_is_rejected(interval: float) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        make(interval=interval)
+
+    assert error_types(exc_info) == [("interval", "time_delta_parsing")]
 
 
 # --- timeout ---------------------------------------------------------------
@@ -100,12 +131,21 @@ def test_integer_timeout_becomes_float() -> None:
     assert isinstance(timeout, float)
 
 
-@pytest.mark.parametrize("timeout", [0, -1, -0.5, float("nan")])
+@pytest.mark.parametrize("timeout", [0, -1, -0.5])
 def test_non_positive_timeout_is_rejected(timeout: float) -> None:
     with pytest.raises(ValidationError) as exc_info:
         make(timeout=timeout)
 
     assert error_types(exc_info) == [("timeout", "greater_than")]
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_timeout_is_rejected(timeout: float) -> None:
+    # JSON не умеет inf и NaN: такой монитор нельзя было бы вернуть клиенту.
+    with pytest.raises(ValidationError) as exc_info:
+        make(timeout=timeout)
+
+    assert error_types(exc_info) == [("timeout", "finite_number")]
 
 
 # --- структура модели ------------------------------------------------------
@@ -148,15 +188,3 @@ def test_dump_and_validate_round_trip() -> None:
 def test_validation_error_is_a_value_error() -> None:
     # Поэтому `except ValueError` в вызывающем коде ловит и ошибки конфига.
     assert issubclass(ValidationError, ValueError)
-
-
-# --- модели API ------------------------------------------------------------
-
-
-def test_create_and_config_share_validation() -> None:
-    data = {"url": "Example.com/a ", "interval": "30s", "timeout": 3}
-
-    assert (
-        MonitorCreate.model_validate(data).model_dump()
-        == MonitorConfig.model_validate(data).model_dump()
-    )

@@ -283,7 +283,7 @@ def test_store_is_injected_through_depends() -> None:
     finally:
         app.dependency_overrides.clear()
 
-    assert [m.url for m in store.list()] == ["https://injected.test"]
+    assert [m.url for m in store.list_all()] == ["https://injected.test"]
 
 
 def test_openapi_documents_statuses_and_error_model(client: TestClient) -> None:
@@ -293,3 +293,135 @@ def test_openapi_documents_statuses_and_error_model(client: TestClient) -> None:
     assert "204" in paths["/monitors/{monitor_id}"]["delete"]["responses"]
     for method in ("get", "patch", "delete"):
         assert "404" in paths["/monitors/{monitor_id}"][method]["responses"]
+
+
+# --- числовой interval и нечисловые литералы -------------------------------
+
+
+def post_raw(client: TestClient, raw_body: str):
+    # Infinity и NaN не умеет собрать json=…: отправляем текст как есть.
+    return client.post(
+        "/monitors", content=raw_body, headers={"content-type": "application/json"}
+    )
+
+
+@pytest.mark.parametrize("interval", ["0", "-5", "true", "false", '"0s"', "0.0"])
+def test_create_rejects_non_positive_or_boolean_interval(
+    client: TestClient, interval: str
+) -> None:
+    response = post_raw(client, f'{{"url": "a.test", "interval": {interval}}}')
+
+    assert response.status_code == 422
+    assert client.get("/monitors").json() == []
+
+
+def test_create_accepts_numeric_interval_in_seconds(client: TestClient) -> None:
+    response = post_raw(client, '{"url": "a.test", "interval": 90}')
+
+    assert response.status_code == 201
+    assert response.json()["interval"] == 90.0
+
+
+@pytest.mark.parametrize("literal", ["Infinity", "-Infinity", "NaN"])
+def test_non_finite_timeout_returns_422_not_500(
+    client: TestClient, literal: str
+) -> None:
+    body = f'{{"url": "a.test", "interval": "5m", "timeout": {literal}}}'
+
+    response = post_raw(client, body)
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["loc"] == ["body", "timeout"]
+
+
+@pytest.mark.parametrize("literal", ["Infinity", "NaN"])
+def test_non_finite_interval_returns_422_not_500(
+    client: TestClient, literal: str
+) -> None:
+    assert (
+        post_raw(client, f'{{"url": "a.test", "interval": {literal}}}').status_code
+        == 422
+    )
+
+
+def test_non_finite_patch_returns_422_and_keeps_monitor(client: TestClient) -> None:
+    created = create(client)
+
+    response = client.patch(
+        f"/monitors/{created['id']}",
+        content='{"timeout": Infinity}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/monitors/{created['id']}").json() == created
+
+
+# --- формат ошибки валидации -----------------------------------------------
+
+
+def test_validation_error_uses_unified_body(client: TestClient) -> None:
+    response = client.post("/monitors", json={"url": "", "interval": "5m"})
+
+    body = response.json()
+    assert response.status_code == 422
+    assert body["code"] == "validation_error"
+    assert isinstance(body["message"], str)
+    assert [e["loc"] for e in body["errors"]] == [["body", "url"]]
+    assert set(body["errors"][0]) == {"loc", "type", "msg"}
+
+
+def test_validation_error_does_not_echo_input(client: TestClient) -> None:
+    secret = "super-secret-value"
+
+    response = client.post(
+        "/monitors", json={"url": "a.test", "interval": "5m", "password": secret}
+    )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+
+
+def test_malformed_json_returns_unified_422(client: TestClient) -> None:
+    response = post_raw(client, "{not json")
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+def test_every_field_error_is_reported(client: TestClient) -> None:
+    response = client.post(
+        "/monitors", json={"url": "", "interval": "0s", "timeout": -1}
+    )
+
+    locs = sorted(tuple(e["loc"]) for e in response.json()["errors"])
+    assert locs == [("body", "interval"), ("body", "timeout"), ("body", "url")]
+
+
+# --- схема OpenAPI ---------------------------------------------------------
+
+
+def test_openapi_describes_interval_input_as_string_or_number(
+    client: TestClient,
+) -> None:
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+
+    for name in ("MonitorCreate", "MonitorUpdate"):
+        interval = schemas[name]["properties"]["interval"]
+        options = interval.get("anyOf", [])
+        assert {"string", "number"} <= {o.get("type") for o in options}
+
+
+def test_openapi_interval_has_no_duration_garbage(client: TestClient) -> None:
+    text = client.get("/openapi.json").text
+
+    assert "PT0S" not in text
+    assert "duration" not in text
+
+
+def test_openapi_documents_unified_validation_error(client: TestClient) -> None:
+    spec = client.get("/openapi.json").json()
+    response = spec["paths"]["/monitors"]["post"]["responses"]["422"]
+
+    ref = response["content"]["application/json"]["schema"]["$ref"]
+    assert ref.endswith("/ValidationErrorResponse")

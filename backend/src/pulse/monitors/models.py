@@ -1,36 +1,39 @@
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
 
-from pydantic import (
-    AfterValidator,
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    PlainSerializer,
-    field_validator,
-)
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 
 from pulse.utils.normalize_url import normalize_url
 from pulse.utils.parse_interval import parse_interval
 
 
 def _parse_interval_if_str(value: object) -> object:
+    # bool это int, и без явной проверки `true` стал бы интервалом в 1 секунду.
+    if isinstance(value, bool):
+        raise ValueError("интервал должен быть строкой ('5m') или числом секунд")
     return parse_interval(value) if isinstance(value, str) else value
 
 
-# Типы-с-валидацией: одно определение для файла конфигурации и для API.
+def _ensure_positive(value: timedelta) -> timedelta:
+    # Проверка на самом типе, а не в Field(gt=timedelta(0)): так она работает и для
+    # строки, и для числа, а в OpenAPI не попадает мусорное `gt: 'PT0S'`.
+    if value <= timedelta(0):
+        raise ValueError("интервал должен быть положительным")
+    return value
+
+
+# Типы с валидацией: одно определение для файла конфигурации и для API.
 Url = Annotated[str, AfterValidator(normalize_url)]
-# В JSON интервал отдаётся секундами, а не ISO 8601 ("PT5M"): число принимается
-# обратно на входе, так что ответ можно отправить в PATCH без преобразований.
 Interval = Annotated[
     timedelta,
-    BeforeValidator(_parse_interval_if_str),
-    PlainSerializer(
-        lambda value: value.total_seconds(), return_type=float, when_used="json"
-    ),
+    # json_schema_input_type: в OpenAPI вход описан как строка или число секунд,
+    # а не как ISO 8601 duration, который принимает сам timedelta.
+    BeforeValidator(_parse_interval_if_str, json_schema_input_type=str | float),
+    AfterValidator(_ensure_positive),
 ]
-Timeout = Annotated[float, Field(gt=0)]
+# inf и NaN отвергаем: JSON их не умеет, и ответ с ними не сериализуется.
+Timeout = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 DEFAULT_TIMEOUT = 10.0
 
@@ -45,43 +48,11 @@ class MonitorConfig(BaseModel):
     timeout: Timeout = DEFAULT_TIMEOUT
 
 
-class MonitorCreate(BaseModel):
-    """Тело POST /monitors."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    url: Url
-    interval: Interval
-    timeout: Timeout = DEFAULT_TIMEOUT
-
-
-class MonitorUpdate(BaseModel):
-    """Тело PATCH /monitors/{id}: меняются только переданные поля.
-
-    Отсутствие поля означает «не менять», а явный `null` запрещён: у монитора
-    нет необязательных полей, которые можно очистить.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    url: Url | None = None
-    interval: Interval | None = None
-    timeout: Timeout | None = None
-
-    @field_validator("url", "interval", "timeout", mode="before")
-    @classmethod
-    def _reject_null(cls, value: object) -> object:
-        if value is None:
-            raise ValueError("значение не может быть null: уберите поле из запроса")
-        return value
-
-
-class MonitorRead(BaseModel):
-    """Монитор в ответе API."""
-
-    model_config = ConfigDict(frozen=True)
+@dataclass(frozen=True)
+class Monitor:
+    """Сохранённый монитор. Значения уже проверены, поэтому класс «глупый»."""
 
     id: int
-    url: Url
-    interval: Interval
-    timeout: Timeout
+    url: str
+    interval: timedelta
+    timeout: float
