@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from pydantic import ValidationError
 
-from pulse.monitors.models import MonitorConfig
+from pulse.monitors.models import MonitorConfig, MonitorCreate
 
 
 def make(**overrides: object) -> MonitorConfig:
@@ -148,3 +148,15 @@ def test_dump_and_validate_round_trip() -> None:
 def test_validation_error_is_a_value_error() -> None:
     # Поэтому `except ValueError` в вызывающем коде ловит и ошибки конфига.
     assert issubclass(ValidationError, ValueError)
+
+
+# --- модели API ------------------------------------------------------------
+
+
+def test_create_and_config_share_validation() -> None:
+    data = {"url": "Example.com/a ", "interval": "30s", "timeout": 3}
+
+    assert (
+        MonitorCreate.model_validate(data).model_dump()
+        == MonitorConfig.model_validate(data).model_dump()
+    )

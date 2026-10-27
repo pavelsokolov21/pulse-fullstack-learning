@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi[standard]>=0.162.0",
     "httpx>=0.28.1",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.16.1",
@@ -38,6 +39,10 @@ types = "pyright"
 test = "pytest"
 watch = "ptw . --now"
 check = ["lint", "types", "test"]
+dev = "fastapi dev"
+
+[tool.fastapi]
+entrypoint = "pulse.api.main:app"
 
 [tool.pyright]
 typeCheckingMode = "strict"
