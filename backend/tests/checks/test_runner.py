@@ -114,7 +114,7 @@ async def test_check_url_measures_latency_in_milliseconds(
     monkeypatch: pytest.MonkeyPatch, handler: Handler
 ) -> None:
     ticks = iter([1.0, 1.25])
-    monkeypatch.setattr("pulse.utils.timer.perf_counter", lambda: next(ticks))
+    monkeypatch.setattr("pulse.core.utils.timer.perf_counter", lambda: next(ticks))
 
     async with make_client(handler) as client:
         result = await check_url(client, URL)

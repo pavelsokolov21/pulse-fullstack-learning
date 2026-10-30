@@ -6,9 +6,10 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from pulse.api.deps import get_store
+from pulse.api.deps import get_monitor_repository, get_monitor_service
 from pulse.api.errors import register_error_handlers
 from pulse.api.main import app
+from pulse.api.middlewares.request_id import RequestIdMiddleware
 
 SECRET = "secret-path /etc/passwd"
 
@@ -134,6 +135,57 @@ def test_app_keeps_working_after_unhandled_exception(
 # --- зависимость -----------------------------------------------------------
 
 
-def test_get_store_is_async_to_avoid_thread_pool() -> None:
+@pytest.mark.parametrize("dependency", [get_monitor_repository, get_monitor_service])
+def test_dependencies_are_async_to_avoid_thread_pool(dependency: object) -> None:
     # Синхронная зависимость уходит в пул потоков ради одной строки.
-    assert inspect.iscoroutinefunction(get_store)
+    assert inspect.iscoroutinefunction(dependency)
+
+
+# --- request-id в ответах и логах -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", "/monitors"),
+        ("get", "/monitors/999"),
+        ("get", "/nope"),
+        ("put", "/monitors"),
+        ("get", "/monitors/abc"),
+    ],
+)
+def test_every_response_of_the_app_has_request_id(
+    client: TestClient, method: str, path: str
+) -> None:
+    response = getattr(client, method)(path)
+
+    assert len(response.headers["x-request-id"]) == 32
+
+
+def test_app_echoes_client_request_id(client: TestClient) -> None:
+    response = client.get("/monitors", headers={"X-Request-ID": "trace-42"})
+
+    assert response.headers["x-request-id"] == "trace-42"
+
+
+def test_unhandled_500_carries_request_id_in_header_and_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    broken = FastAPI()
+    register_error_handlers(broken)
+    broken.add_middleware(RequestIdMiddleware)
+
+    @broken.get("/boom")
+    async def boom() -> None:  # pyright: ignore[reportUnusedFunction]
+        raise RuntimeError(SECRET)
+
+    test_client = TestClient(broken, raise_server_exceptions=False)
+
+    with caplog.at_level(logging.ERROR, logger="pulse.api.errors"):
+        response = test_client.get("/boom", headers={"X-Request-ID": "trace-500"})
+
+    assert response.status_code == 500
+    assert response.headers["x-request-id"] == "trace-500"
+    [record] = caplog.records
+    assert record.__dict__["request_id"] == "trace-500"
+    assert SECRET not in response.text

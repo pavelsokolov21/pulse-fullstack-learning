@@ -1,8 +1,8 @@
 from collections import deque
 
 from pulse.checks.models import CheckResult
-from pulse.decorators.validation import validate_range
-from pulse.utils.stats import get_failure_rate, get_p95
+from pulse.checks.stats import get_failure_rate, get_p95
+from pulse.core.decorators.validation import validate_range
 
 
 class RollingWindow:

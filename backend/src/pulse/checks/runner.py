@@ -5,9 +5,9 @@ from itertools import batched
 import httpx
 
 from pulse.checks.models import CheckResult
-from pulse.decorators.validation import validate_range
-from pulse.utils.normalize_url import normalize_url
-from pulse.utils.timer import timed
+from pulse.core.decorators.validation import validate_range
+from pulse.core.utils.normalize_url import normalize_url
+from pulse.core.utils.timer import timed
 
 
 async def check_url(client: httpx.AsyncClient, url: str) -> CheckResult:

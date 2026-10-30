@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pulse = "pulse.cli:app"
+pulse = "pulse.cli.main:app"
 
 
 [build-system]

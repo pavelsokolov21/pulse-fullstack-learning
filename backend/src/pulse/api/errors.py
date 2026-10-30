@@ -7,7 +7,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from pulse.monitors.errors import MonitorNotFoundError
+from pulse.api.middlewares.request_id import REQUEST_ID_HEADER
+from pulse.domain.errors import DuplicateMonitorError, MonitorNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,12 @@ async def monitor_not_found_handler(request: Request, exc: Exception) -> JSONRes
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND, content=body.model_dump()
     )
+
+
+async def duplicate_monitor_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Сюда попадает только DuplicateMonitorError (см. регистрацию ниже).
+    body = ErrorResponse(code="monitor_already_exists", message=str(exc))
+    return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=body.model_dump())
 
 
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -71,15 +78,24 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
     # Текст исключения клиенту не отдаём: в нём могут быть пути, SQL и данные.
     # Полная трассировка уходит в лог (и в stderr сервера: Starlette поднимет
     # исключение дальше после ответа).
-    logger.error("Необработанная ошибка", exc_info=exc)
+    # Ответ 500 строится снаружи RequestIdMiddleware: contextvar уже сброшен, id
+    # берём из scope (если middleware подключён).
+    request_id: str | None = request.scope.get("state", {}).get("request_id")
+    logger.error(
+        "Необработанная ошибка", exc_info=exc, extra={"request_id": request_id or "-"}
+    )
     body = ErrorResponse(code="internal_error", message="Внутренняя ошибка сервера")
+    headers = {REQUEST_ID_HEADER: request_id} if request_id else None
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=body.model_dump()
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=body.model_dump(),
+        headers=headers,
     )
 
 
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(MonitorNotFoundError, monitor_not_found_handler)
+    app.add_exception_handler(DuplicateMonitorError, duplicate_monitor_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_error_handler)
     app.add_exception_handler(Exception, unhandled_error_handler)

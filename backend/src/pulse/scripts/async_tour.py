@@ -3,7 +3,7 @@ from asyncio import gather
 from time import perf_counter
 
 from pulse.checks.models import CheckResult
-from pulse.utils.timer import timed
+from pulse.core.utils.timer import timed
 
 
 async def probe(host: str, delay: float, *, fail: bool = False) -> CheckResult:

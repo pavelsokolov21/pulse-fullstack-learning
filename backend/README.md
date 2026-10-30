@@ -58,13 +58,21 @@ uv run poe check    # ruff + pyright (strict) + pytest
 
 ## Структура
 
+Слои зависят только вниз: `api → services → repositories → domain`. `core` не зависит ни от кого, `checks` и `cli` стоят сбоку. Направление импортов проверяет `tests/test_architecture.py`.
+
 ```
 src/pulse/
-  cli.py         команда `pulse check`, форматирование вывода
-  settings.py    настройки из окружения (pydantic-settings)
-  monitors/      модель монитора и загрузка из TOML
-  checks/        проверка URL, пачки, скользящее окно
-  decorators/    валидация аргументов
-  utils/         разбор интервалов, нормализация URL, p95, статистика, таймер
-tests/           зеркалит структуру src/pulse/
+  api/            HTTP: сборка приложения, ошибки, Depends
+    middlewares/  ASGI-middleware (request-id)
+    routers/      обработчики эндпоинтов
+    schemas/      тела запросов и ответов (Create / Update / Read)
+  services/       операции над мониторами, бизнес-правила
+  repositories/   хранение (сейчас в памяти, в фазе 2 PostgreSQL)
+  domain/         сущности, общие типы с валидацией, доменные ошибки
+  checks/         проверка URL: runner, скользящее окно, статистика
+  cli/            команда `pulse check`, загрузка мониторов из TOML
+  core/           настройки, утилиты, декораторы, контекст запроса для логов
+tests/            зеркалит структуру src/pulse/
 ```
+
+Запуск API: `uv run poe dev`, затем http://127.0.0.1:8000/docs.
