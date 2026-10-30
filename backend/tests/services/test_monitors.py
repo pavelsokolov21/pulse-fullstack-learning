@@ -1,9 +1,10 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from pulse.domain.errors import DuplicateMonitorError, MonitorNotFoundError
 from pulse.domain.monitors import Monitor
+from pulse.repositories.checks import CheckRepository
 from pulse.repositories.monitors import MonitorRepository
 from pulse.services.monitors import MonitorService
 
@@ -16,8 +17,15 @@ def repository() -> MonitorRepository:
 
 
 @pytest.fixture
-def service(repository: MonitorRepository) -> MonitorService:
-    return MonitorService(repository)
+def check_repository() -> CheckRepository:
+    return CheckRepository()
+
+
+@pytest.fixture
+def service(
+    repository: MonitorRepository, check_repository: CheckRepository
+) -> MonitorService:
+    return MonitorService(repository, check_repository)
 
 
 def add(service: MonitorService, url: str = "https://a.test") -> Monitor:
@@ -77,8 +85,8 @@ def test_unknown_id_raises_domain_error(
 
 
 def test_services_over_different_repositories_do_not_share_state() -> None:
-    first = MonitorService(MonitorRepository())
-    second = MonitorService(MonitorRepository())
+    first = MonitorService(MonitorRepository(), CheckRepository())
+    second = MonitorService(MonitorRepository(), CheckRepository())
     add(first)
 
     assert second.list_all() == []
@@ -159,3 +167,42 @@ def test_update_unknown_id_is_not_found_not_conflict(service: MonitorService) ->
 
     with pytest.raises(MonitorNotFoundError):
         service.update(99, url="https://a.test")
+
+
+# --- каскад ----------------------------------------------------------------
+
+
+def add_check(checks: CheckRepository, monitor_id: int) -> None:
+    checks.add(
+        monitor_id=monitor_id,
+        url="https://a.test",
+        status_code=200,
+        latency_ms=1.0,
+        error=None,
+        checked_at=datetime(2026, 1, 1, tzinfo=UTC),
+        ok=True,
+    )
+
+
+def test_delete_removes_checks_of_that_monitor_only(
+    service: MonitorService, check_repository: CheckRepository
+) -> None:
+    first, second = add(service, "https://a.test"), add(service, "https://b.test")
+    add_check(check_repository, first.id)
+    add_check(check_repository, second.id)
+
+    service.delete(first.id)
+
+    assert check_repository.list_recent(first.id, 10) == []
+    assert len(check_repository.list_recent(second.id, 10)) == 1
+
+
+def test_delete_of_unknown_monitor_keeps_checks(
+    service: MonitorService, check_repository: CheckRepository
+) -> None:
+    add_check(check_repository, 5)
+
+    with pytest.raises(MonitorNotFoundError):
+        service.delete(5)
+
+    assert len(check_repository.list_recent(5, 10)) == 1

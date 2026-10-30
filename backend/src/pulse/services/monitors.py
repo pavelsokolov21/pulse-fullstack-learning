@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from pulse.domain.errors import DuplicateMonitorError
 from pulse.domain.monitors import Monitor
+from pulse.repositories.checks import CheckRepository
 from pulse.repositories.monitors import MonitorRepository
 
 
@@ -17,8 +18,9 @@ class MonitorService:
     её закроет UNIQUE-ограничение, а эта проверка останется для понятной ошибки.
     """
 
-    def __init__(self, repository: MonitorRepository) -> None:
+    def __init__(self, repository: MonitorRepository, checks: CheckRepository) -> None:
         self._repository = repository
+        self._checks = checks
 
     def list_all(self) -> list[Monitor]:
         return self._repository.list_all()
@@ -48,6 +50,9 @@ class MonitorService:
 
     def delete(self, monitor_id: int) -> None:
         self._repository.delete(monitor_id)
+        # Каскад: проверки удалённого монитора никому не нужны. В базе (фаза 2)
+        # это сделает внешний ключ с ON DELETE CASCADE.
+        self._checks.delete_for_monitor(monitor_id)
 
     def _ensure_url_is_free(self, url: str, *, allow_id: int | None = None) -> None:
         # allow_id: монитор может «сменить» URL на свой же, это не дубликат.

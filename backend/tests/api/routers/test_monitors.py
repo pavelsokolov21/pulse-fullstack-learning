@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from pulse.api.deps import get_monitor_repository, get_monitor_service
 from pulse.api.main import app
 from pulse.domain.monitors import Monitor
+from pulse.repositories.checks import CheckRepository
 from pulse.repositories.monitors import MonitorRepository
 from pulse.services.monitors import MonitorService
 
@@ -292,7 +293,7 @@ def test_repository_is_injected_through_depends() -> None:
 
 def test_service_is_injected_through_depends() -> None:
     repository = MonitorRepository()
-    service = MonitorService(repository)
+    service = MonitorService(repository, CheckRepository())
     app.dependency_overrides[get_monitor_service] = lambda: service
     try:
         with TestClient(app) as client:

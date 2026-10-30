@@ -10,12 +10,17 @@ from pulse.core.utils.normalize_url import normalize_url
 from pulse.core.utils.timer import timed
 
 
-async def check_url(client: httpx.AsyncClient, url: str) -> CheckResult:
+async def check_url(
+    client: httpx.AsyncClient, url: str, *, timeout: float | None = None
+) -> CheckResult:
     """Проверяет один URL.
 
     Сетевые сбои (таймаут, отказ соединения, DNS) не бросают исключение, а
     попадают в `CheckResult.error`. Мусорный URL, который нельзя даже
     отправить, бросает `ValueError`: это ошибка данных, а не «сайт недоступен».
+
+    `timeout` (секунды) переопределяет таймаут клиента для этого запроса;
+    без него действует таймаут самого клиента.
     """
     target = normalize_url(url)
 
@@ -24,7 +29,11 @@ async def check_url(client: httpx.AsyncClient, url: str) -> CheckResult:
 
     with timed() as t:
         try:
-            response = await client.get(target, follow_redirects=True)
+            response = await client.get(
+                target,
+                follow_redirects=True,
+                timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout,
+            )
             status_code = response.status_code
         except httpx.InvalidURL as exc:
             raise ValueError(str(exc)) from exc

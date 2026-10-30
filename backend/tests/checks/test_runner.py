@@ -587,3 +587,54 @@ async def test_non_positive_concurrency_raises() -> None:
     async with make_client(respond(200)) as client:
         with pytest.raises(ValueError, match="concurrency"):
             await check_in_batches(client, site_urls(2), concurrency=0)
+
+
+# --- таймаут запроса -------------------------------------------------------
+
+
+def record_timeouts(seen: list[dict[str, float | None]]) -> Handler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200)
+
+    return handler
+
+
+async def test_check_url_passes_timeout_to_the_request() -> None:
+    seen: list[dict[str, float | None]] = []
+
+    async with make_client(record_timeouts(seen)) as client:
+        await check_url(client, URL, timeout=2.5)
+
+    assert seen == [{"connect": 2.5, "read": 2.5, "write": 2.5, "pool": 2.5}]
+
+
+async def test_check_url_without_timeout_uses_client_default() -> None:
+    seen: list[dict[str, float | None]] = []
+    transport = httpx.MockTransport(record_timeouts(seen))
+
+    async with httpx.AsyncClient(transport=transport, timeout=7.0) as client:
+        await check_url(client, URL)
+
+    assert seen == [{"connect": 7.0, "read": 7.0, "write": 7.0, "pool": 7.0}]
+
+
+async def test_check_url_timeout_overrides_client_default() -> None:
+    seen: list[dict[str, float | None]] = []
+    transport = httpx.MockTransport(record_timeouts(seen))
+
+    async with httpx.AsyncClient(transport=transport, timeout=7.0) as client:
+        await check_url(client, URL, timeout=1.0)
+
+    assert seen[0]["read"] == 1.0
+
+
+async def test_check_url_timeout_error_is_reported_as_network_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    async with make_client(handler) as client:
+        result = await check_url(client, URL, timeout=0.1)
+
+    assert result.status_code is None
+    assert result.error == "Network Error: ReadTimeout"
