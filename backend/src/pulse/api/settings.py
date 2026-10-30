@@ -1,0 +1,46 @@
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from pulse.repositories.checks import DEFAULT_MAX_CHECKS_PER_MONITOR
+
+# Хост и порт сюда не входят: их принимает запускающий процесс
+# (`fastapi dev --host --port`, `uvicorn --host --port`), приложение их не читает.
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+
+class ApiSettings(BaseSettings):
+    """Настройки API из окружения (`PULSE_API_*`).
+
+    Отдельный класс от CLI-шного `core.settings.Settings`: у них разные
+    префиксы и разные потребители.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="PULSE_API_", frozen=True)
+
+    environment: Literal["dev", "prod"] = Field(
+        default="dev", description="В prod документация /docs и /redoc отключается"
+    )
+    log_level: LogLevel = Field(default="INFO", description="Уровень логов pulse.*")
+    max_checks_per_monitor: int = Field(
+        default=DEFAULT_MAX_CHECKS_PER_MONITOR,
+        ge=1,
+        description="Сколько последних проверок хранить на монитор",
+    )
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _upper_case_log_level(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
+
+
+@lru_cache
+def get_settings() -> ApiSettings:
+    """Настройки процесса, прочитанные один раз.
+
+    Кэш не видит изменений окружения: в тестах передавайте `ApiSettings(...)` в
+    `create_app` или вызывайте `get_settings.cache_clear()`.
+    """
+    return ApiSettings()

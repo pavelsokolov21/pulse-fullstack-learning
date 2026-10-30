@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from pulse.api.deps import get_http_client
 from pulse.api.main import app
-from pulse.repositories.checks import MAX_CHECKS_PER_MONITOR
+from pulse.repositories.checks import DEFAULT_MAX_CHECKS_PER_MONITOR
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -204,15 +204,16 @@ def test_list_accepts_limit_bounds(client: TestClient, limit: int) -> None:
 
 def test_history_is_capped_per_monitor(client: TestClient) -> None:
     monitor_id = create_monitor(client)
-    for _ in range(MAX_CHECKS_PER_MONITOR + 5):
+    for _ in range(DEFAULT_MAX_CHECKS_PER_MONITOR + 5):
         run(client, monitor_id)
 
     listed = client.get(
-        f"/monitors/{monitor_id}/checks", params={"limit": MAX_CHECKS_PER_MONITOR}
+        f"/monitors/{monitor_id}/checks",
+        params={"limit": DEFAULT_MAX_CHECKS_PER_MONITOR},
     ).json()
 
-    assert len(listed) == MAX_CHECKS_PER_MONITOR
-    assert listed[0]["id"] == MAX_CHECKS_PER_MONITOR + 5
+    assert len(listed) == DEFAULT_MAX_CHECKS_PER_MONITOR
+    assert listed[0]["id"] == DEFAULT_MAX_CHECKS_PER_MONITOR + 5
     assert listed[-1]["id"] == 6
 
 

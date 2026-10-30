@@ -1,7 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from pulse.domain.checks import Check
-from pulse.repositories.checks import MAX_CHECKS_PER_MONITOR, CheckRepository
+from pulse.repositories.checks import DEFAULT_MAX_CHECKS_PER_MONITOR, CheckRepository
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -73,22 +75,22 @@ def test_monitors_have_separate_histories() -> None:
 
 def test_history_is_capped_and_oldest_are_dropped() -> None:
     repo = CheckRepository()
-    checks = [add(repo, n=n) for n in range(MAX_CHECKS_PER_MONITOR + 5)]
+    checks = [add(repo, n=n) for n in range(DEFAULT_MAX_CHECKS_PER_MONITOR + 5)]
 
-    stored = repo.list_recent(1, MAX_CHECKS_PER_MONITOR + 50)
+    stored = repo.list_recent(1, DEFAULT_MAX_CHECKS_PER_MONITOR + 50)
 
-    assert len(stored) == MAX_CHECKS_PER_MONITOR
+    assert len(stored) == DEFAULT_MAX_CHECKS_PER_MONITOR
     assert stored[0] == checks[-1]
     assert stored[-1] == checks[5]
 
 
 def test_cap_is_per_monitor() -> None:
     repo = CheckRepository()
-    for n in range(MAX_CHECKS_PER_MONITOR):
+    for n in range(DEFAULT_MAX_CHECKS_PER_MONITOR):
         add(repo, monitor_id=1, n=n)
     other = add(repo, monitor_id=2)
 
-    assert len(repo.list_recent(1, 1000)) == MAX_CHECKS_PER_MONITOR
+    assert len(repo.list_recent(1, 1000)) == DEFAULT_MAX_CHECKS_PER_MONITOR
     assert repo.list_recent(2, 10) == [other]
 
 
@@ -113,3 +115,35 @@ def test_ids_are_not_reused_after_delete() -> None:
     repo.delete_for_monitor(1)
 
     assert add(repo).id == 2
+
+
+# --- настраиваемый предел --------------------------------------------------
+
+
+def test_custom_cap_limits_history() -> None:
+    repo = CheckRepository(max_per_monitor=3)
+    checks = [add(repo, n=n) for n in range(5)]
+
+    assert repo.list_recent(1, 10) == [checks[4], checks[3], checks[2]]
+
+
+def test_cap_of_one_keeps_only_the_latest() -> None:
+    repo = CheckRepository(max_per_monitor=1)
+    add(repo, n=0)
+    latest = add(repo, n=1)
+
+    assert repo.list_recent(1, 10) == [latest]
+
+
+def test_default_cap_is_the_module_default() -> None:
+    repo = CheckRepository()
+    for n in range(DEFAULT_MAX_CHECKS_PER_MONITOR + 1):
+        add(repo, n=n)
+
+    assert len(repo.list_recent(1, 1000)) == DEFAULT_MAX_CHECKS_PER_MONITOR
+
+
+@pytest.mark.parametrize("cap", [0, -1])
+def test_non_positive_cap_is_rejected(cap: int) -> None:
+    with pytest.raises(ValueError, match="max_per_monitor"):
+        CheckRepository(max_per_monitor=cap)

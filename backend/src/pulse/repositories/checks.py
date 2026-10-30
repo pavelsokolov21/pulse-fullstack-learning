@@ -4,18 +4,23 @@ from itertools import count
 
 from pulse.domain.checks import Check
 
-MAX_CHECKS_PER_MONITOR = 100
+DEFAULT_MAX_CHECKS_PER_MONITOR = 100
 
 
 class CheckRepository:
     """Последние проверки мониторов в памяти.
 
-    На монитор хранится не больше `MAX_CHECKS_PER_MONITOR` проверок: старые
+    На монитор хранится не больше `max_per_monitor` проверок: старые
     вытесняются. Как и `MonitorRepository`, не потокобезопасен и рассчитан на
     вызовы из одного потока event loop.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_per_monitor: int = DEFAULT_MAX_CHECKS_PER_MONITOR) -> None:
+        # deque(maxlen=0) молча выбрасывает всё, а отрицательный maxlen даёт
+        # ValueError только внутри deque: проверяем явно и сразу.
+        if max_per_monitor < 1:
+            raise ValueError("max_per_monitor должен быть не меньше 1")
+        self._max_per_monitor = max_per_monitor
         self._checks: dict[int, deque[Check]] = {}
         self._ids = count(1)
 
@@ -41,7 +46,7 @@ class CheckRepository:
             ok=ok,
         )
         window = self._checks.setdefault(
-            monitor_id, deque[Check](maxlen=MAX_CHECKS_PER_MONITOR)
+            monitor_id, deque[Check](maxlen=self._max_per_monitor)
         )
         window.append(check)
         return check
