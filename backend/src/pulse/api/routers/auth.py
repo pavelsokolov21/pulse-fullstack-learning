@@ -6,7 +6,6 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pulse.api.cookies import (
     REFRESH_COOKIE_NAME,
     clear_refresh_cookie,
-    cookie_secure,
     set_refresh_cookie,
 )
 from pulse.api.deps import (
@@ -49,7 +48,7 @@ def _respond_with_tokens(
         response,
         pair.refresh.token,
         max_age=pair.refresh.expires_in,
-        secure=cookie_secure(settings),
+        settings=settings,
     )
     # RFC 6749 §5.1: ответ с токеном нельзя кэшировать.
     response.headers["Cache-Control"] = "no-store"
@@ -108,7 +107,7 @@ async def logout(
 ) -> None:
     """Отзывает сессию и сбрасывает cookie. Повторный вызов тоже даёт 204."""
     auth.logout(refresh_token)
-    clear_refresh_cookie(response, secure=cookie_secure(settings))
+    clear_refresh_cookie(response, settings)
 
 
 @router.get("/me", responses=UNAUTHORIZED)

@@ -263,3 +263,21 @@ def test_new_settings_reject_invalid_values(
 
     with pytest.raises(ValidationError):
         settings_with()
+
+
+def test_refresh_cookie_path_defaults_to_auth() -> None:
+    assert settings_with().refresh_cookie_path == "/auth"
+
+
+def test_refresh_cookie_path_is_read_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PULSE_API_REFRESH_COOKIE_PATH", "/api/auth")
+
+    assert settings_with().refresh_cookie_path == "/api/auth"
+
+
+@pytest.mark.parametrize("value", ["auth", "", "api/auth"])
+def test_refresh_cookie_path_must_be_absolute(value: str) -> None:
+    with pytest.raises(ValidationError, match="refresh_cookie_path"):
+        settings_with(refresh_cookie_path=value)

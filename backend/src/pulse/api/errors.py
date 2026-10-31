@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from pulse.api.cookies import clear_refresh_cookie, cookie_secure
+from pulse.api.cookies import clear_refresh_cookie
 from pulse.api.middlewares.request_id import REQUEST_ID_HEADER
 from pulse.domain.errors import (
     AuthenticationError,
@@ -74,7 +74,7 @@ async def authentication_error_handler(
     if isinstance(exc, RefreshTokenError):
         # Мёртвый refresh-токен браузер больше не должен присылать.
         settings = request.app.state.settings
-        clear_refresh_cookie(response, secure=cookie_secure(settings))
+        clear_refresh_cookie(response, settings)
     return response
 
 

@@ -1,0 +1,30 @@
+{
+  "name": "pulse-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "gen:api": "uv run --project ../backend python -m pulse.api.export_openapi openapi.json && openapi-typescript openapi.json --default-non-nullable false -o src/api/schema.d.ts",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "next": "16.4.3",
+    "openapi-fetch": "^0.17.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.3",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5",
+    "vitest": "^5.0.5"
+  }
+}

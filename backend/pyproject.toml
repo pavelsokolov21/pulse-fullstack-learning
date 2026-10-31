@@ -42,6 +42,7 @@ test = "pytest"
 watch = "ptw . --now"
 check = ["lint", "types", "test"]
 dev = "fastapi dev"
+openapi = "python -m pulse.api.export_openapi ../frontend/openapi.json"
 
 [tool.fastapi]
 entrypoint = "pulse.api.main:app"

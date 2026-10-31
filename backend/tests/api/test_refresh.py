@@ -106,6 +106,24 @@ def test_refresh_ttl_comes_from_settings() -> None:
     assert f"max-age={3 * 24 * 3600}" in header
 
 
+def test_refresh_cookie_path_comes_from_settings() -> None:
+    # За прокси Next.js API живёт под /api, и cookie должна уходить на /api/auth.
+    overrides: dict[str, Any] = {"refresh_cookie_path": "/api/auth"}
+    app = create_app(ApiSettings(**overrides))
+
+    with TestClient(app) as client:
+        register(client)
+        issued = login(client).headers["set-cookie"].lower()
+        client.cookies.set(COOKIE, "garbage", domain="testserver.local", path="/auth")
+        rejected = client.post("/auth/refresh").headers["set-cookie"].lower()
+        cleared = client.post("/auth/logout").headers["set-cookie"].lower()
+
+    assert "path=/api/auth" in issued
+    # Сброс должен совпадать по пути, иначе браузер не удалит cookie.
+    assert "path=/api/auth" in rejected
+    assert "path=/api/auth" in cleared
+
+
 def test_refresh_cookie_is_secure_in_prod() -> None:
     app = create_app(ApiSettings(environment="prod"))  # pyright: ignore[reportCallIssue]
 

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from pulse.api.errors import register_error_handlers
 from pulse.api.http_client import create_http_client
 from pulse.api.middlewares.request_id import RequestIdMiddleware
+from pulse.api.openapi import generate_operation_id
 from pulse.api.routers.auth import router as auth_router
 from pulse.api.routers.checks import router as checks_router
 from pulse.api.routers.monitors import router as monitors_router
@@ -61,6 +62,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         lifespan=lifespan,
         docs_url=None if is_prod else "/docs",
         redoc_url=None if is_prod else "/redoc",
+        generate_unique_id_function=generate_operation_id,
     )
     app.state.settings = settings
     register_error_handlers(app)

@@ -50,6 +50,14 @@ class ApiSettings(BaseSettings):
     login_rate_limit_window_seconds: int = Field(
         default=60, ge=1, description="Окно ограничения частоты входа, секунды"
     )
+    refresh_cookie_path: str = Field(
+        default="/auth",
+        pattern=r"^/",
+        description=(
+            "Path cookie с refresh-токеном. За прокси Next.js, который отдаёт API "
+            "под /api, нужен /api/auth: браузер шлёт cookie только на этот путь"
+        ),
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod

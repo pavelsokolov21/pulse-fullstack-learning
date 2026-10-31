@@ -178,7 +178,8 @@ async def enforce_login_rate_limit(
 ) -> None:
     # Адрес берём из соединения. За прокси сервер надо запускать с
     # --proxy-headers/--forwarded-allow-ips: заголовок X-Forwarded-For из запроса
-    # подделывается, и доверять ему в приложении нельзя.
+    # подделывается, и доверять ему в приложении нельзя. Особенность прокси Next.js
+    # (он заголовок не ставит, а пропускает) описан в README.
     key = request.client.host if request.client else "unknown"
     result = limiter.hit(key)
     if not result.allowed:
