@@ -1,17 +1,11 @@
-from collections.abc import Callable
-from datetime import UTC, datetime
-
 import httpx
 
 from pulse.checks.models import CheckResult
 from pulse.checks.runner import check_url
+from pulse.core.clock import Clock, utc_now
 from pulse.domain.checks import Check
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.monitors import MonitorRepository
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 class CheckService:
@@ -26,7 +20,7 @@ class CheckService:
         monitors: MonitorRepository,
         checks: CheckRepository,
         client: httpx.AsyncClient,
-        clock: Callable[[], datetime] = _utc_now,
+        clock: Clock = utc_now,
     ) -> None:
         self._monitors = monitors
         self._checks = checks

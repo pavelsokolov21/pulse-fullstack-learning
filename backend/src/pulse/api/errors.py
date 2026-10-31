@@ -8,7 +8,12 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from pulse.api.middlewares.request_id import REQUEST_ID_HEADER
-from pulse.domain.errors import DuplicateMonitorError, MonitorNotFoundError
+from pulse.domain.errors import (
+    AuthenticationError,
+    DuplicateMonitorError,
+    DuplicateUserError,
+    MonitorNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,25 @@ async def duplicate_monitor_handler(request: Request, exc: Exception) -> JSONRes
     # Сюда попадает только DuplicateMonitorError (см. регистрацию ниже).
     body = ErrorResponse(code="monitor_already_exists", message=str(exc))
     return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=body.model_dump())
+
+
+async def duplicate_user_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Сюда попадает только DuplicateUserError (см. регистрацию ниже).
+    body = ErrorResponse(code="user_already_exists", message=str(exc))
+    return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=body.model_dump())
+
+
+async def authentication_error_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    assert isinstance(exc, AuthenticationError)
+    body = ErrorResponse(code=exc.code, message=exc.message)
+    # RFC 6750: ответ 401 обязан сообщать, какая схема аутентификации ожидается.
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content=body.model_dump(),
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -96,6 +120,8 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(MonitorNotFoundError, monitor_not_found_handler)
     app.add_exception_handler(DuplicateMonitorError, duplicate_monitor_handler)
+    app.add_exception_handler(DuplicateUserError, duplicate_user_handler)
+    app.add_exception_handler(AuthenticationError, authentication_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_error_handler)
     app.add_exception_handler(Exception, unhandled_error_handler)

@@ -1,15 +1,18 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
-from pulse.api.deps import CheckServiceDep
+from pulse.api.deps import CheckServiceDep, get_current_user
 from pulse.api.errors import ErrorResponse, ValidationErrorResponse
 from pulse.api.schemas.checks import CheckRead
 
 router = APIRouter(
     prefix="/monitors/{monitor_id}/checks",
     tags=["checks"],
+    # Весь роутер закрыт авторизацией: новую ручку нельзя «забыть» защитить.
+    dependencies=[Depends(get_current_user)],
     responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ValidationErrorResponse},
     },

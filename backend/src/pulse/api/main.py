@@ -7,11 +7,14 @@ from fastapi import FastAPI
 from pulse.api.errors import register_error_handlers
 from pulse.api.http_client import create_http_client
 from pulse.api.middlewares.request_id import RequestIdMiddleware
+from pulse.api.routers.auth import router as auth_router
 from pulse.api.routers.checks import router as checks_router
 from pulse.api.routers.monitors import router as monitors_router
 from pulse.api.settings import ApiSettings, get_settings
+from pulse.core.passwords import PasswordHasher
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.monitors import MonitorRepository
+from pulse.repositories.users import UserRepository
 
 
 @asynccontextmanager
@@ -22,6 +25,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     settings: ApiSettings = app.state.settings
     app.state.monitor_repository = MonitorRepository()
     app.state.check_repository = CheckRepository(settings.max_checks_per_monitor)
+    app.state.user_repository = UserRepository()
+    app.state.password_hasher = PasswordHasher()
 
     logger = logging.getLogger("pulse")
     previous_level = logger.level
@@ -54,6 +59,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.state.settings = settings
     register_error_handlers(app)
     app.add_middleware(RequestIdMiddleware)
+    app.include_router(auth_router)
     app.include_router(monitors_router)
     app.include_router(checks_router)
     return app

@@ -1,8 +1,8 @@
 from typing import Any
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 
-from pulse.api.deps import MonitorServiceDep
+from pulse.api.deps import MonitorServiceDep, get_current_user
 from pulse.api.errors import ErrorResponse, ValidationErrorResponse
 from pulse.api.schemas.monitors import MonitorCreate, MonitorRead, MonitorUpdate
 
@@ -11,8 +11,11 @@ from pulse.api.schemas.monitors import MonitorCreate, MonitorRead, MonitorUpdate
 router = APIRouter(
     prefix="/monitors",
     tags=["monitors"],
+    # Весь роутер закрыт авторизацией: новую ручку нельзя «забыть» защитить.
+    dependencies=[Depends(get_current_user)],
     responses={
-        status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ValidationErrorResponse}
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ValidationErrorResponse},
     },
 )
 

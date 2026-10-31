@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from pulse.repositories.checks import DEFAULT_MAX_CHECKS_PER_MONITOR
@@ -18,7 +18,11 @@ class ApiSettings(BaseSettings):
     префиксы и разные потребители.
     """
 
-    model_config = SettingsConfigDict(env_prefix="PULSE_API_", frozen=True)
+    # hide_input_in_errors: иначе при слишком коротком секрете ValidationError
+    # печатает его значение (input_value=...) в лог запуска.
+    model_config = SettingsConfigDict(
+        env_prefix="PULSE_API_", frozen=True, hide_input_in_errors=True
+    )
 
     environment: Literal["dev", "prod"] = Field(
         default="dev", description="В prod документация /docs и /redoc отключается"
@@ -28,6 +32,14 @@ class ApiSettings(BaseSettings):
         default=DEFAULT_MAX_CHECKS_PER_MONITOR,
         ge=1,
         description="Сколько последних проверок хранить на монитор",
+    )
+
+    jwt_secret: SecretStr = Field(
+        min_length=32,
+        description="Ключ подписи JWT (HS256), не короче 32 символов",
+    )
+    access_token_ttl_minutes: int = Field(
+        default=15, ge=1, description="Срок жизни access-токена, минуты"
     )
 
     @field_validator("log_level", mode="before")
@@ -43,4 +55,5 @@ def get_settings() -> ApiSettings:
     Кэш не видит изменений окружения: в тестах передавайте `ApiSettings(...)` в
     `create_app` или вызывайте `get_settings.cache_clear()`.
     """
-    return ApiSettings()
+    # Обязательные поля (jwt_secret) читаются из окружения, а не из аргументов.
+    return ApiSettings()  # pyright: ignore[reportCallIssue]

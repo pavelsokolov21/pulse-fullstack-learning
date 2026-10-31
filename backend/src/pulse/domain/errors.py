@@ -13,3 +13,45 @@ class DuplicateMonitorError(Exception):
         super().__init__(f"Монитор с URL {url} уже существует (id {existing_id})")
         self.url = url
         self.existing_id = existing_id
+
+
+class DuplicateUserError(Exception):
+    """Пользователь с таким email уже есть."""
+
+    def __init__(self) -> None:
+        super().__init__("Пользователь с таким email уже существует")
+
+
+class AuthenticationError(Exception):
+    """Базовый класс 401: запрос не удалось аутентифицировать.
+
+    Тексты общие: по ним нельзя понять, чего именно не оказалось (пользователя
+    или пароля).
+    """
+
+    code = "not_authenticated"
+    message = "Требуется авторизация"
+
+    def __init__(self) -> None:
+        super().__init__(self.message)
+
+
+class InvalidCredentialsError(AuthenticationError):
+    code = "invalid_credentials"
+    message = "Неверный email или пароль"
+
+
+class MissingTokenError(AuthenticationError):
+    pass
+
+
+class InvalidTokenError(AuthenticationError):
+    """Токен подделан, повреждён или относится к несуществующему пользователю."""
+
+    code = "invalid_token"
+    message = "Недействительный токен"
+
+
+class TokenExpiredError(InvalidTokenError):
+    code = "token_expired"
+    message = "Срок действия токена истёк"
