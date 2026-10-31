@@ -41,6 +41,15 @@ class ApiSettings(BaseSettings):
     access_token_ttl_minutes: int = Field(
         default=15, ge=1, description="Срок жизни access-токена, минуты"
     )
+    refresh_token_ttl_days: int = Field(
+        default=7, ge=1, description="Срок жизни refresh-токена, дни"
+    )
+    login_rate_limit_attempts: int = Field(
+        default=5, ge=1, description="Попыток входа с одного адреса за окно"
+    )
+    login_rate_limit_window_seconds: int = Field(
+        default=60, ge=1, description="Окно ограничения частоты входа, секунды"
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod

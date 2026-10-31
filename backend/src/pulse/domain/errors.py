@@ -55,3 +55,34 @@ class InvalidTokenError(AuthenticationError):
 class TokenExpiredError(InvalidTokenError):
     code = "token_expired"
     message = "Срок действия токена истёк"
+
+
+class RefreshTokenError(AuthenticationError):
+    """Базовый класс ошибок refresh-токена: при них cookie нужно сбросить."""
+
+    code = "invalid_refresh_token"
+    message = "Недействительный refresh-токен"
+
+
+class InvalidRefreshTokenError(RefreshTokenError):
+    """Токен неизвестен, отозван или использован повторно."""
+
+
+class RefreshTokenExpiredError(RefreshTokenError):
+    code = "refresh_token_expired"
+    message = "Срок действия refresh-токена истёк"
+
+
+class PermissionDeniedError(Exception):
+    """Пользователь аутентифицирован, но его роль не разрешает это действие (403)."""
+
+    def __init__(self) -> None:
+        super().__init__("Недостаточно прав для этого действия")
+
+
+class RateLimitExceededError(Exception):
+    """Слишком много запросов; повторить можно через `retry_after` секунд (429)."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("Слишком много запросов, попробуйте позже")
+        self.retry_after = retry_after

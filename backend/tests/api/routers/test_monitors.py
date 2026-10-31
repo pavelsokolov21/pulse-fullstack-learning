@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from pulse.api.deps import get_monitor_repository, get_monitor_service
 from pulse.api.main import app
 from pulse.domain.monitors import Monitor
+from pulse.domain.users import User
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.monitors import MonitorRepository
 from pulse.services.monitors import MonitorService
@@ -39,6 +40,7 @@ def test_create_returns_201_with_id_and_normalized_fields(client: TestClient) ->
     assert response.status_code == 201
     assert response.json() == {
         "id": 1,
+        "owner_id": 1,
         "url": "https://example.com/Path",
         "interval": 300.0,
         "timeout": 3.0,
@@ -180,7 +182,7 @@ def test_empty_patch_changes_nothing(client: TestClient) -> None:
 def test_response_fields_can_be_sent_back_to_patch(client: TestClient) -> None:
     # Интервал читается секундами и принимается секундами: круг замыкается.
     created = create(client, interval="5m", timeout=3)
-    body = {k: v for k, v in created.items() if k != "id"}
+    body = {k: v for k, v in created.items() if k not in ("id", "owner_id")}
 
     response = client.patch(f"/monitors/{created['id']}", json=body)
 
@@ -306,8 +308,10 @@ def test_service_is_injected_through_depends() -> None:
 
 def test_router_works_through_a_fake_service() -> None:
     class FakeService:
-        def list_all(self) -> list[Monitor]:
-            return [Monitor(7, "https://fake.test", timedelta(seconds=5), 1.0)]
+        def list_all(self, actor: User) -> list[Monitor]:
+            return [
+                Monitor(7, actor.id, "https://fake.test", timedelta(seconds=5), 1.0)
+            ]
 
     app.dependency_overrides[get_monitor_service] = lambda: FakeService()
     try:
@@ -317,7 +321,13 @@ def test_router_works_through_a_fake_service() -> None:
         app.dependency_overrides.clear()
 
     assert body == [
-        {"id": 7, "url": "https://fake.test", "interval": 5.0, "timeout": 1.0}
+        {
+            "id": 7,
+            "owner_id": 1,
+            "url": "https://fake.test",
+            "interval": 5.0,
+            "timeout": 1.0,
+        }
     ]
 
 

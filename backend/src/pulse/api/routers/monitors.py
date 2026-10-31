@@ -2,7 +2,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, status
 
-from pulse.api.deps import MonitorServiceDep, get_current_user
+from pulse.api.deps import (
+    CurrentUserDep,
+    MonitorServiceDep,
+    get_current_user,
+    require_writer,
+)
 from pulse.api.errors import ErrorResponse, ValidationErrorResponse
 from pulse.api.schemas.monitors import MonitorCreate, MonitorRead, MonitorUpdate
 
@@ -19,6 +24,9 @@ router = APIRouter(
     },
 )
 
+FORBIDDEN: dict[int | str, dict[str, Any]] = {
+    status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}
+}
 NOT_FOUND: dict[int | str, dict[str, Any]] = {
     status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}
 }
@@ -27,33 +35,54 @@ CONFLICT: dict[int | str, dict[str, Any]] = {
 }
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, responses=CONFLICT)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_writer)],
+    responses=CONFLICT | FORBIDDEN,
+)
 async def create_monitor(
-    body: MonitorCreate, service: MonitorServiceDep
+    body: MonitorCreate, service: MonitorServiceDep, user: CurrentUserDep
 ) -> MonitorRead:
-    return MonitorRead.model_validate(service.create(**body.model_dump()))
+    return MonitorRead.model_validate(service.create(user, **body.model_dump()))
 
 
 @router.get("")
-async def list_monitors(service: MonitorServiceDep) -> list[MonitorRead]:
-    return [MonitorRead.model_validate(m) for m in service.list_all()]
+async def list_monitors(
+    service: MonitorServiceDep, user: CurrentUserDep
+) -> list[MonitorRead]:
+    return [MonitorRead.model_validate(m) for m in service.list_all(user)]
 
 
 @router.get("/{monitor_id}", responses=NOT_FOUND)
-async def get_monitor(monitor_id: int, service: MonitorServiceDep) -> MonitorRead:
-    return MonitorRead.model_validate(service.get(monitor_id))
+async def get_monitor(
+    monitor_id: int, service: MonitorServiceDep, user: CurrentUserDep
+) -> MonitorRead:
+    return MonitorRead.model_validate(service.get(user, monitor_id))
 
 
-@router.patch("/{monitor_id}", responses=NOT_FOUND | CONFLICT)
+@router.patch(
+    "/{monitor_id}",
+    dependencies=[Depends(require_writer)],
+    responses=NOT_FOUND | CONFLICT | FORBIDDEN,
+)
 async def update_monitor(
-    monitor_id: int, body: MonitorUpdate, service: MonitorServiceDep
+    monitor_id: int,
+    body: MonitorUpdate,
+    service: MonitorServiceDep,
+    user: CurrentUserDep,
 ) -> MonitorRead:
     changes = body.model_dump(exclude_unset=True)
-    return MonitorRead.model_validate(service.update(monitor_id, **changes))
+    return MonitorRead.model_validate(service.update(user, monitor_id, **changes))
 
 
 @router.delete(
-    "/{monitor_id}", status_code=status.HTTP_204_NO_CONTENT, responses=NOT_FOUND
+    "/{monitor_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_writer)],
+    responses=NOT_FOUND | FORBIDDEN,
 )
-async def delete_monitor(monitor_id: int, service: MonitorServiceDep) -> None:
-    service.delete(monitor_id)
+async def delete_monitor(
+    monitor_id: int, service: MonitorServiceDep, user: CurrentUserDep
+) -> None:
+    service.delete(user, monitor_id)

@@ -23,18 +23,31 @@ class MonitorRepository:
     def list_all(self) -> list[Monitor]:
         return list(self._monitors.values())
 
+    def list_for_owner(self, owner_id: int) -> list[Monitor]:
+        """Мониторы одного владельца. Фильтр здесь, а не в сервисе: в базе это WHERE."""
+        return [m for m in self._monitors.values() if m.owner_id == owner_id]
+
     def get(self, monitor_id: int) -> Monitor:
         try:
             return self._monitors[monitor_id]
         except KeyError:
             raise MonitorNotFoundError(monitor_id) from None
 
-    def find_by_url(self, url: str) -> Monitor | None:
-        """Монитор с точно таким URL (URL уже нормализован) или `None`."""
-        return next((m for m in self._monitors.values() if m.url == url), None)
+    def find_by_url(self, owner_id: int, url: str) -> Monitor | None:
+        """Монитор владельца с точно таким URL (URL уже нормализован) или `None`."""
+        return next(
+            (
+                m
+                for m in self._monitors.values()
+                if m.owner_id == owner_id and m.url == url
+            ),
+            None,
+        )
 
-    def create(self, *, url: str, interval: timedelta, timeout: float) -> Monitor:
-        monitor = Monitor(next(self._ids), url, interval, timeout)
+    def create(
+        self, *, owner_id: int, url: str, interval: timedelta, timeout: float
+    ) -> Monitor:
+        monitor = Monitor(next(self._ids), owner_id, url, interval, timeout)
         self._monitors[monitor.id] = monitor
         return monitor
 

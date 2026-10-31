@@ -7,12 +7,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from pulse.api.cookies import clear_refresh_cookie, cookie_secure
 from pulse.api.middlewares.request_id import REQUEST_ID_HEADER
 from pulse.domain.errors import (
     AuthenticationError,
     DuplicateMonitorError,
     DuplicateUserError,
     MonitorNotFoundError,
+    PermissionDeniedError,
+    RateLimitExceededError,
+    RefreshTokenError,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,10 +66,33 @@ async def authentication_error_handler(
     assert isinstance(exc, AuthenticationError)
     body = ErrorResponse(code=exc.code, message=exc.message)
     # RFC 6750: ответ 401 обязан сообщать, какая схема аутентификации ожидается.
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content=body.model_dump(),
         headers={"WWW-Authenticate": "Bearer"},
+    )
+    if isinstance(exc, RefreshTokenError):
+        # Мёртвый refresh-токен браузер больше не должен присылать.
+        settings = request.app.state.settings
+        clear_refresh_cookie(response, secure=cookie_secure(settings))
+    return response
+
+
+async def permission_denied_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Сюда попадает только PermissionDeniedError (см. регистрацию ниже).
+    body = ErrorResponse(code="forbidden", message=str(exc))
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN, content=body.model_dump()
+    )
+
+
+async def rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, RateLimitExceededError)
+    body = ErrorResponse(code="rate_limited", message=str(exc))
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content=body.model_dump(),
+        headers={"Retry-After": str(exc.retry_after)},
     )
 
 
@@ -122,6 +149,8 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(DuplicateMonitorError, duplicate_monitor_handler)
     app.add_exception_handler(DuplicateUserError, duplicate_user_handler)
     app.add_exception_handler(AuthenticationError, authentication_error_handler)
+    app.add_exception_handler(PermissionDeniedError, permission_denied_handler)
+    app.add_exception_handler(RateLimitExceededError, rate_limit_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_error_handler)
     app.add_exception_handler(Exception, unhandled_error_handler)

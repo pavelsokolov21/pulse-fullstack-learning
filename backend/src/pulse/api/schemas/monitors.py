@@ -50,6 +50,7 @@ class MonitorRead(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     id: int
+    owner_id: int
     url: str
     interval: IntervalSeconds
     timeout: float

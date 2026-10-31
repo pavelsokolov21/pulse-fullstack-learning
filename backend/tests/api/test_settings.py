@@ -220,3 +220,46 @@ def test_invalid_access_token_lifetime_is_rejected(
 
     with pytest.raises(ValidationError):
         settings_with()
+
+
+# --- refresh и ограничение частоты -----------------------------------------
+
+
+def test_new_settings_defaults() -> None:
+    settings = settings_with()
+
+    assert settings.refresh_token_ttl_days == 7
+    assert settings.login_rate_limit_attempts == 5
+    assert settings.login_rate_limit_window_seconds == 60
+
+
+def test_new_settings_are_read_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PULSE_API_REFRESH_TOKEN_TTL_DAYS", "30")
+    monkeypatch.setenv("PULSE_API_LOGIN_RATE_LIMIT_ATTEMPTS", "10")
+    monkeypatch.setenv("PULSE_API_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "300")
+
+    settings = settings_with()
+
+    assert settings.refresh_token_ttl_days == 30
+    assert settings.login_rate_limit_attempts == 10
+    assert settings.login_rate_limit_window_seconds == 300
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "REFRESH_TOKEN_TTL_DAYS",
+        "LOGIN_RATE_LIMIT_ATTEMPTS",
+        "LOGIN_RATE_LIMIT_WINDOW_SECONDS",
+    ],
+)
+@pytest.mark.parametrize("value", ["0", "-1", "often", "1.5"])
+def test_new_settings_reject_invalid_values(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(f"PULSE_API_{name}", value)
+
+    with pytest.raises(ValidationError):
+        settings_with()

@@ -45,7 +45,7 @@ def test_register_returns_201_and_the_user_without_hash(
     response = register(auth_client)
 
     assert response.status_code == 201
-    assert response.json() == {"id": 1, "email": "alice@example.com"}
+    assert response.json() == {"id": 1, "email": "alice@example.com", "role": "manager"}
 
 
 def test_register_response_has_no_password_material(auth_client: TestClient) -> None:
@@ -260,7 +260,7 @@ def test_me_returns_the_current_user(auth_client: TestClient) -> None:
     response = auth_client.get("/auth/me", headers=bearer(token))
 
     assert response.status_code == 200
-    assert response.json() == {"id": 1, "email": "alice@example.com"}
+    assert response.json() == {"id": 1, "email": "alice@example.com", "role": "manager"}
 
 
 def test_me_distinguishes_users(auth_client: TestClient) -> None:

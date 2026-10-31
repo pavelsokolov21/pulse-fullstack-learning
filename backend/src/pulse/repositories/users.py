@@ -1,6 +1,6 @@
 from itertools import count
 
-from pulse.domain.users import User
+from pulse.domain.users import Role, User
 
 
 class UserRepository:
@@ -21,7 +21,9 @@ class UserRepository:
     def find_by_email(self, email: str) -> User | None:
         return next((u for u in self._users.values() if u.email == email), None)
 
-    def create(self, *, email: str, password_hash: str) -> User:
-        user = User(next(self._ids), email, password_hash)
+    def create(
+        self, *, email: str, password_hash: str, role: Role = Role.MANAGER
+    ) -> User:
+        user = User(next(self._ids), email, password_hash, role)
         self._users[user.id] = user
         return user

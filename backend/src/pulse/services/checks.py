@@ -4,8 +4,9 @@ from pulse.checks.models import CheckResult
 from pulse.checks.runner import check_url
 from pulse.core.clock import Clock, utc_now
 from pulse.domain.checks import Check
+from pulse.domain.users import User
 from pulse.repositories.checks import CheckRepository
-from pulse.repositories.monitors import MonitorRepository
+from pulse.services.monitors import MonitorService
 
 
 class CheckService:
@@ -17,7 +18,7 @@ class CheckService:
 
     def __init__(
         self,
-        monitors: MonitorRepository,
+        monitors: MonitorService,
         checks: CheckRepository,
         client: httpx.AsyncClient,
         clock: Clock = utc_now,
@@ -27,14 +28,14 @@ class CheckService:
         self._client = client
         self._clock = clock
 
-    async def run(self, monitor_id: int) -> Check:
+    async def run(self, actor: User, monitor_id: int) -> Check:
         """Проверяет монитор и сохраняет результат.
 
         Если монитор удалили, пока шёл запрос, результат не сохраняется (иначе
         остались бы проверки несуществующего монитора) и поднимается
         `MonitorNotFoundError`.
         """
-        monitor = self._monitors.get(monitor_id)
+        monitor = self._monitors.get(actor, monitor_id)
 
         try:
             result = await check_url(self._client, monitor.url, timeout=monitor.timeout)
@@ -49,7 +50,7 @@ class CheckService:
                 error=f"Invalid URL: {exc}",
             )
 
-        self._monitors.get(monitor_id)  # за время await монитор мог исчезнуть
+        self._monitors.get(actor, monitor_id)  # за время await монитор мог исчезнуть
 
         return self._checks.add(
             monitor_id=monitor_id,
@@ -61,6 +62,6 @@ class CheckService:
             ok=result.ok,
         )
 
-    def list_recent(self, monitor_id: int, limit: int) -> list[Check]:
-        self._monitors.get(monitor_id)
+    def list_recent(self, actor: User, monitor_id: int, limit: int) -> list[Check]:
+        self._monitors.get(actor, monitor_id)
         return self._checks.list_recent(monitor_id, limit)

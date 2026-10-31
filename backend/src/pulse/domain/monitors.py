@@ -21,6 +21,7 @@ class Monitor:
     """Сохранённый монитор. Значения уже проверены, поэтому класс «глупый»."""
 
     id: int
+    owner_id: int
     url: str
     interval: timedelta
     timeout: float

@@ -9,12 +9,18 @@ from pulse.domain.monitors import Monitor
 from pulse.repositories.monitors import MonitorRepository
 
 FIVE_MINUTES = timedelta(minutes=5)
+OWNER = 1
 
 
 def add(
-    store: MonitorRepository, url: str = "https://a.test", timeout: float = 10.0
+    store: MonitorRepository,
+    url: str = "https://a.test",
+    timeout: float = 10.0,
+    owner_id: int = OWNER,
 ) -> Monitor:
-    return store.create(url=url, interval=FIVE_MINUTES, timeout=timeout)
+    return store.create(
+        owner_id=owner_id, url=url, interval=FIVE_MINUTES, timeout=timeout
+    )
 
 
 def test_new_store_is_empty() -> None:
@@ -32,7 +38,7 @@ def test_create_assigns_increasing_ids_from_one() -> None:
 def test_create_keeps_given_values() -> None:
     monitor = add(MonitorRepository(), "https://a.test", timeout=3.0)
 
-    assert monitor == Monitor(1, "https://a.test", FIVE_MINUTES, 3.0)
+    assert monitor == Monitor(1, OWNER, "https://a.test", FIVE_MINUTES, 3.0)
 
 
 def test_get_returns_what_was_created() -> None:
@@ -64,7 +70,7 @@ def test_update_applies_only_given_fields() -> None:
 
     updated = store.update(created.id, timeout=9.0)
 
-    assert updated == Monitor(created.id, created.url, FIVE_MINUTES, 9.0)
+    assert updated == Monitor(created.id, OWNER, created.url, FIVE_MINUTES, 9.0)
     assert store.get(created.id) == updated
 
 
@@ -76,7 +82,9 @@ def test_update_can_change_every_field_at_once() -> None:
         created.id, url="https://b.test", interval=timedelta(hours=1), timeout=1.0
     )
 
-    assert updated == Monitor(created.id, "https://b.test", timedelta(hours=1), 1.0)
+    assert updated == Monitor(
+        created.id, OWNER, "https://b.test", timedelta(hours=1), 1.0
+    )
 
 
 def test_update_without_fields_keeps_monitor() -> None:
@@ -167,14 +175,14 @@ def test_find_by_url_returns_matching_monitor() -> None:
     add(store, "https://a.test")
     target = add(store, "https://b.test")
 
-    assert store.find_by_url("https://b.test") == target
+    assert store.find_by_url(OWNER, "https://b.test") == target
 
 
 def test_find_by_url_returns_none_when_absent() -> None:
     store = MonitorRepository()
     add(store, "https://a.test")
 
-    assert store.find_by_url("https://other.test") is None
+    assert store.find_by_url(OWNER, "https://other.test") is None
 
 
 def test_find_by_url_is_exact_and_does_not_normalize() -> None:
@@ -182,7 +190,7 @@ def test_find_by_url_is_exact_and_does_not_normalize() -> None:
     store = MonitorRepository()
     add(store, "https://a.test")
 
-    assert store.find_by_url("https://A.test") is None
+    assert store.find_by_url(OWNER, "https://A.test") is None
 
 
 def test_find_by_url_does_not_see_deleted_monitors() -> None:
@@ -190,7 +198,7 @@ def test_find_by_url_does_not_see_deleted_monitors() -> None:
     created = add(store, "https://a.test")
     store.delete(created.id)
 
-    assert store.find_by_url("https://a.test") is None
+    assert store.find_by_url(OWNER, "https://a.test") is None
 
 
 def test_find_by_url_sees_updated_url() -> None:
@@ -198,13 +206,71 @@ def test_find_by_url_sees_updated_url() -> None:
     created = add(store, "https://a.test")
     store.update(created.id, url="https://b.test")
 
-    assert store.find_by_url("https://a.test") is None
-    assert store.find_by_url("https://b.test") is not None
+    assert store.find_by_url(OWNER, "https://a.test") is None
+    assert store.find_by_url(OWNER, "https://b.test") is not None
 
 
 def test_find_by_url_does_not_match_substrings() -> None:
     store = MonitorRepository()
     add(store, "https://a.test/path")
 
-    assert store.find_by_url("https://a.test") is None
-    assert store.find_by_url("https://a.test/path/more") is None
+    assert store.find_by_url(OWNER, "https://a.test") is None
+    assert store.find_by_url(OWNER, "https://a.test/path/more") is None
+
+
+# --- владельцы -------------------------------------------------------------
+
+
+def test_create_keeps_the_owner() -> None:
+    assert add(MonitorRepository(), owner_id=7).owner_id == 7
+
+
+def test_list_for_owner_returns_only_that_owners_monitors_in_order() -> None:
+    store = MonitorRepository()
+    mine = [
+        add(store, "https://a.test", owner_id=1),
+        add(store, "https://c.test", owner_id=1),
+    ]
+    add(store, "https://b.test", owner_id=2)
+
+    assert store.list_for_owner(1) == mine
+
+
+def test_list_for_owner_without_monitors_is_empty() -> None:
+    store = MonitorRepository()
+    add(store, owner_id=1)
+
+    assert store.list_for_owner(2) == []
+
+
+def test_list_all_ignores_owners() -> None:
+    store = MonitorRepository()
+    first, second = (
+        add(store, "https://a.test", owner_id=1),
+        add(store, "https://b.test", owner_id=2),
+    )
+
+    assert store.list_all() == [first, second]
+
+
+def test_same_url_may_belong_to_different_owners() -> None:
+    store = MonitorRepository()
+    first = add(store, "https://a.test", owner_id=1)
+    second = add(store, "https://a.test", owner_id=2)
+
+    assert store.find_by_url(1, "https://a.test") == first
+    assert store.find_by_url(2, "https://a.test") == second
+
+
+def test_find_by_url_ignores_other_owners_monitors() -> None:
+    store = MonitorRepository()
+    add(store, "https://a.test", owner_id=1)
+
+    assert store.find_by_url(2, "https://a.test") is None
+
+
+def test_update_keeps_the_owner() -> None:
+    store = MonitorRepository()
+    created = add(store, owner_id=5)
+
+    assert store.update(created.id, timeout=1.0).owner_id == 5

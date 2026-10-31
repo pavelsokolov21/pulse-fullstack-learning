@@ -1,3 +1,4 @@
+from pulse.domain.users import Role
 from pulse.repositories.users import UserRepository
 
 
@@ -40,3 +41,13 @@ def test_repositories_do_not_share_state() -> None:
     first.create(email="a@example.com", password_hash="h")
 
     assert second.find_by_email("a@example.com") is None
+
+
+def test_create_defaults_to_manager_and_keeps_given_role() -> None:
+    repo = UserRepository()
+
+    assert repo.create(email="a@example.com", password_hash="h").role is Role.MANAGER
+    assert (
+        repo.create(email="b@example.com", password_hash="h", role=Role.ADMIN).role
+        is Role.ADMIN
+    )

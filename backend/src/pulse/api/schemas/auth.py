@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, ConfigDict, EmailStr, Field, SecretStr
 
 from pulse.core.utils.normalize_email import normalize_email
-from pulse.domain.users import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
+from pulse.domain.users import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, Role
 
 
 def _normalize_if_str(value: object) -> object:
@@ -33,6 +33,7 @@ class UserRead(BaseModel):
 
     id: int
     email: str
+    role: Role
 
 
 class TokenResponse(BaseModel):

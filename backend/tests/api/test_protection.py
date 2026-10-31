@@ -151,6 +151,8 @@ def test_public_auth_routes_are_not_marked_as_secured(auth_app: FastAPI) -> None
             201,
         ),
         ("POST", "/auth/login", None, 422),
+        ("POST", "/auth/refresh", None, 401),
+        ("POST", "/auth/logout", None, 204),
         ("GET", "/openapi.json", None, 200),
         ("GET", "/docs", None, 200),
         ("GET", "/no-such-route", None, 404),

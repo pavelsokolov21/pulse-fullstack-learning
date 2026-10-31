@@ -36,7 +36,7 @@ def test_update_tracks_which_fields_were_set() -> None:
 
 def test_read_is_built_from_monitor_without_revalidation() -> None:
     # Выходная модель «глупая»: значение из хранилища берётся как есть.
-    monitor = Monitor(1, "not-normalized-on-purpose", timedelta(minutes=5), 3.0)
+    monitor = Monitor(1, 1, "not-normalized-on-purpose", timedelta(minutes=5), 3.0)
 
     read = MonitorRead.model_validate(monitor)
 
@@ -45,7 +45,11 @@ def test_read_is_built_from_monitor_without_revalidation() -> None:
 
 def test_read_serializes_interval_as_seconds() -> None:
     read = MonitorRead(
-        id=1, url="https://a.test", interval=timedelta(minutes=5), timeout=3.0
+        id=1,
+        owner_id=1,
+        url="https://a.test",
+        interval=timedelta(minutes=5),
+        timeout=3.0,
     )
 
     assert read.model_dump(mode="json")["interval"] == 300.0
@@ -53,7 +57,11 @@ def test_read_serializes_interval_as_seconds() -> None:
 
 def test_read_is_frozen() -> None:
     read = MonitorRead(
-        id=1, url="https://a.test", interval=timedelta(seconds=1), timeout=1.0
+        id=1,
+        owner_id=1,
+        url="https://a.test",
+        interval=timedelta(seconds=1),
+        timeout=1.0,
     )
 
     with pytest.raises(ValidationError):
