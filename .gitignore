@@ -23,3 +23,5 @@ htmlcov/
 # Локальные данные
 *.db
 *.sqlite3
+
+test.py
