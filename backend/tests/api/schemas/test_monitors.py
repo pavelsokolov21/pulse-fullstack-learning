@@ -66,3 +66,30 @@ def test_read_is_frozen() -> None:
 
     with pytest.raises(ValidationError):
         read.timeout = 2.0
+
+
+def test_create_enforces_the_same_interval_bounds_as_config() -> None:
+    for interval in ("29s", "25h", 29, 30.5):
+        with pytest.raises(ValidationError):
+            MonitorCreate.model_validate({"url": "a.test", "interval": interval})
+        with pytest.raises(ValidationError):
+            MonitorConfig.model_validate({"url": "a.test", "interval": interval})
+
+
+@pytest.mark.parametrize(("interval", "timeout"), [("30s", 30), ("1m", 61)])
+def test_create_rejects_timeout_not_shorter_than_interval(
+    interval: str, timeout: float
+) -> None:
+    data = {"url": "a.test", "interval": interval, "timeout": timeout}
+
+    with pytest.raises(ValidationError, match="короче интервала"):
+        MonitorCreate.model_validate(data)
+    with pytest.raises(ValidationError, match="короче интервала"):
+        MonitorConfig.model_validate(data)
+
+
+def test_update_does_not_check_the_pair_it_only_sees_half_of() -> None:
+    # PATCH может прислать одно поле: сочетание с прежним значением проверяет сервис.
+    update = MonitorUpdate.model_validate({"timeout": 500})
+
+    assert update.timeout == 500

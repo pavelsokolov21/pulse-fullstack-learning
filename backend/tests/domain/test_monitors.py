@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from pydantic import ValidationError
 
-from pulse.domain.monitors import MonitorConfig
+from pulse.domain.monitors import MonitorConfig, ensure_timeout_fits_interval
 
 
 def make(**overrides: object) -> MonitorConfig:
@@ -188,3 +188,112 @@ def test_dump_and_validate_round_trip() -> None:
 def test_validation_error_is_a_value_error() -> None:
     # Поэтому `except ValueError` в вызывающем коде ловит и ошибки конфига.
     assert issubclass(ValidationError, ValueError)
+
+
+# --- границы интервала ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("30s", timedelta(seconds=30)),
+        ("24h", timedelta(hours=24)),
+        ("1440m", timedelta(hours=24)),
+        (30, timedelta(seconds=30)),
+        (86400, timedelta(hours=24)),
+        (timedelta(seconds=30), timedelta(seconds=30)),
+    ],
+)
+def test_interval_bounds_are_inclusive(raw: object, expected: timedelta) -> None:
+    assert make(interval=raw).interval == expected
+
+
+@pytest.mark.parametrize(
+    "interval",
+    [
+        "29s",
+        "1s",
+        "25h",
+        "86401s",
+        29,
+        86401,
+        timedelta(seconds=29),
+        timedelta(hours=24, seconds=1),
+    ],
+)
+def test_interval_outside_bounds_is_rejected(interval: object) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        make(interval=interval)
+
+    assert error_types(exc_info) == [("interval", "value_error")]
+    assert "от 30 секунд до 24 часов" in exc_info.value.errors()[0]["msg"]
+
+
+@pytest.mark.parametrize(
+    "interval",
+    [
+        29.999,
+        30.5,
+        90.1,
+        timedelta(seconds=60, microseconds=1),
+        timedelta(minutes=2, milliseconds=1),
+    ],
+)
+def test_fractional_seconds_are_rejected(interval: object) -> None:
+    # В БД интервал это integer секунд: дробную часть некуда хранить.
+    with pytest.raises(ValidationError) as exc_info:
+        make(interval=interval)
+
+    assert error_types(exc_info) == [("interval", "value_error")]
+    assert "целым числом секунд" in exc_info.value.errors()[0]["msg"]
+
+
+def test_whole_seconds_given_as_float_are_accepted() -> None:
+    assert make(interval=90.0).interval == timedelta(seconds=90)
+
+
+# --- таймаут короче интервала ----------------------------------------------
+
+
+def test_default_timeout_fits_the_shortest_interval() -> None:
+    # 10 с по умолчанию должны помещаться в минимальные 30 с.
+    assert make(interval="30s").timeout < make(interval="30s").interval.total_seconds()
+
+
+@pytest.mark.parametrize(
+    ("interval", "timeout"),
+    [("30s", 29.999), ("1m", 59), ("5m", 10), ("5m", 299.5)],
+)
+def test_timeout_shorter_than_interval_is_accepted(
+    interval: str, timeout: float
+) -> None:
+    assert make(interval=interval, timeout=timeout).timeout == timeout
+
+
+@pytest.mark.parametrize(
+    ("interval", "timeout"),
+    [("30s", 30), ("30s", 45), ("1m", 60), ("1m", 60.001), ("5m", 3600)],
+)
+def test_timeout_not_shorter_than_interval_is_rejected(
+    interval: str, timeout: float
+) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        make(interval=interval, timeout=timeout)
+
+    (error,) = exc_info.value.errors()
+    assert error["type"] == "value_error"
+    assert "короче интервала" in error["msg"]
+
+
+def test_timeout_rule_is_not_reported_when_interval_itself_is_invalid() -> None:
+    # Одна ошибка по делу, а не каскад: правило про сочетание полей не запускается.
+    with pytest.raises(ValidationError) as exc_info:
+        make(interval="1s", timeout=50)
+
+    assert error_types(exc_info) == [("interval", "value_error")]
+
+
+def test_ensure_timeout_fits_interval_compares_in_seconds() -> None:
+    ensure_timeout_fits_interval(timedelta(minutes=1), 59.9)
+    with pytest.raises(ValueError, match="короче интервала"):
+        ensure_timeout_fits_interval(timedelta(minutes=1), 60)

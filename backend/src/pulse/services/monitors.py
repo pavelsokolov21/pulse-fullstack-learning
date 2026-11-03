@@ -1,7 +1,11 @@
 from datetime import timedelta
 
-from pulse.domain.errors import DuplicateMonitorError, MonitorNotFoundError
-from pulse.domain.monitors import Monitor
+from pulse.domain.errors import (
+    DuplicateMonitorError,
+    InvalidMonitorError,
+    MonitorNotFoundError,
+)
+from pulse.domain.monitors import Monitor, ensure_timeout_fits_interval
 from pulse.domain.users import Role, User
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.monitors import MonitorRepository
@@ -40,6 +44,7 @@ class MonitorService:
         self, actor: User, *, url: str, interval: timedelta, timeout: float
     ) -> Monitor:
         # Владелец всегда тот, кто создаёт: его нельзя передать из запроса.
+        self._ensure_timeout_fits(interval, timeout)
         self._ensure_url_is_free(actor.id, url)
         return self._repository.create(
             owner_id=actor.id, url=url, interval=interval, timeout=timeout
@@ -56,6 +61,13 @@ class MonitorService:
     ) -> Monitor:
         """Меняет только переданные поля; `None` означает «не менять»."""
         monitor = self.get(actor, monitor_id)  # 404 раньше, чем 409
+        # Правило про сочетание полей: PATCH мог поменять только одно из них.
+        self._ensure_timeout_fits(
+            interval if interval is not None else monitor.interval,
+            timeout if timeout is not None else monitor.timeout,
+            # Виновато то поле, которое пришло в запросе; если оба, то таймаут.
+            field="interval" if timeout is None and interval is not None else "timeout",
+        )
         if url is not None:
             # Уникальность в рамках владельца монитора, а не того, кто правит.
             self._ensure_url_is_free(monitor.owner_id, url, allow_id=monitor_id)
@@ -69,6 +81,15 @@ class MonitorService:
         # Каскад: проверки удалённого монитора никому не нужны. В базе (фаза 2)
         # это сделает внешний ключ с ON DELETE CASCADE.
         self._checks.delete_for_monitor(monitor_id)
+
+    @staticmethod
+    def _ensure_timeout_fits(
+        interval: timedelta, timeout: float, *, field: str = "timeout"
+    ) -> None:
+        try:
+            ensure_timeout_fits_interval(interval, timeout)
+        except ValueError as exc:
+            raise InvalidMonitorError(field, str(exc)) from exc
 
     def _ensure_url_is_free(
         self, owner_id: int, url: str, *, allow_id: int | None = None

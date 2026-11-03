@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      # Логин и пароль берутся из .env (в git не попадает, образец в .env.example).
+      # Без них compose не стартует: пустого пароля быть не должно.
+      POSTGRES_USER: ${POSTGRES_USER:?задайте POSTGRES_USER в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: pulse
+    ports:
+      - "127.0.0.1:5432:5432" # только localhost, а не все интерфейсы
+    volumes:
+      # Для 18+ том монтируется в /var/lib/postgresql (раньше было .../data).
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      # $$ защищает переменные от подстановки compose: они раскроются уже внутри
+      # контейнера, где POSTGRES_USER и POSTGRES_DB заданы.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -14,11 +14,19 @@ def _parse_interval_if_str(value: object) -> object:
     return parse_interval(value) if isinstance(value, str) else value
 
 
-def _ensure_positive(value: timedelta) -> timedelta:
-    # Проверка на самом типе, а не в Field(gt=timedelta(0)): так она работает и для
-    # строки, и для числа, а в OpenAPI не попадает мусорное `gt: 'PT0S'`.
-    if value <= timedelta(0):
-        raise ValueError("интервал должен быть положительным")
+# Границы интервала проверки. В БД те же числа: CHECK monitors_interval_range
+# (db/schema.sql). Целые секунды: так интервал однозначно хранится в integer.
+MIN_INTERVAL = timedelta(seconds=30)
+MAX_INTERVAL = timedelta(hours=24)
+
+
+def _ensure_allowed(value: timedelta) -> timedelta:
+    # Проверка на самом типе, а не в Field(gt=...): так она работает и для строки,
+    # и для числа, а в OpenAPI не попадают мусорные `gt: 'PT0S'`.
+    if value % timedelta(seconds=1):
+        raise ValueError("интервал должен быть целым числом секунд")
+    if not MIN_INTERVAL <= value <= MAX_INTERVAL:
+        raise ValueError("интервал должен быть от 30 секунд до 24 часов")
     return value
 
 
@@ -29,7 +37,7 @@ Interval = Annotated[
     # json_schema_input_type: в OpenAPI вход описан как строка или число секунд,
     # а не как ISO 8601 duration, который принимает сам timedelta.
     BeforeValidator(_parse_interval_if_str, json_schema_input_type=str | float),
-    AfterValidator(_ensure_positive),
+    AfterValidator(_ensure_allowed),
 ]
 # inf и NaN отвергаем: JSON их не умеет, и ответ с ними не сериализуется.
 Timeout = Annotated[float, Field(gt=0, allow_inf_nan=False)]

@@ -585,3 +585,96 @@ def test_url_that_is_a_prefix_of_an_existing_one_is_not_a_duplicate(
     response = client.post("/monitors", json={"url": "a.test", "interval": "5m"})
 
     assert response.status_code == 201
+
+
+# --- границы интервала и согласованность с таймаутом ------------------------
+
+
+def test_create_rejects_interval_below_the_minimum(client: TestClient) -> None:
+    response = client.post("/monitors", json={"url": "a.test", "interval": "29s"})
+
+    assert response.status_code == 422
+    (error,) = response.json()["errors"]
+    assert error["loc"] == ["body", "interval"]
+    assert "от 30 секунд до 24 часов" in error["msg"]
+    assert client.get("/monitors").json() == []
+
+
+@pytest.mark.parametrize("interval", ["25h", 86401, 30.5])
+def test_create_rejects_other_invalid_intervals(
+    client: TestClient, interval: object
+) -> None:
+    response = client.post("/monitors", json={"url": "a.test", "interval": interval})
+
+    assert response.status_code == 422
+
+
+def test_create_accepts_the_bounds(client: TestClient) -> None:
+    low = create(client, url="low.test", interval="30s")
+    high = create(client, url="high.test", interval="24h")
+
+    assert (low["interval"], high["interval"]) == (30.0, 86400.0)
+
+
+def test_create_rejects_timeout_not_shorter_than_interval(client: TestClient) -> None:
+    response = client.post(
+        "/monitors", json={"url": "a.test", "interval": "30s", "timeout": 30}
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "validation_error"
+    assert "короче интервала" in body["errors"][0]["msg"]
+
+
+def test_patch_rejects_timeout_that_does_not_fit_the_stored_interval(
+    client: TestClient,
+) -> None:
+    created = create(client, interval="1m")  # таймаут по умолчанию 10
+
+    response = client.patch(f"/monitors/{created['id']}", json={"timeout": 60})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "validation_error",
+        "message": "Запрос не прошёл проверку",
+        "errors": [
+            {
+                "loc": ["body", "timeout"],
+                "type": "value_error",
+                "msg": "таймаут должен быть короче интервала проверки",
+            }
+        ],
+    }
+    assert client.get(f"/monitors/{created['id']}").json() == created
+
+
+def test_patch_rejects_interval_shorter_than_the_stored_timeout(
+    client: TestClient,
+) -> None:
+    created = create(client, interval="5m", timeout=100)
+
+    response = client.patch(f"/monitors/{created['id']}", json={"interval": "1m"})
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["loc"] == ["body", "interval"]
+    assert client.get(f"/monitors/{created['id']}").json() == created
+
+
+def test_patch_accepts_a_consistent_pair(client: TestClient) -> None:
+    created = create(client, interval="5m", timeout=100)
+
+    response = client.patch(
+        f"/monitors/{created['id']}", json={"interval": "1m", "timeout": 50}
+    )
+
+    assert response.status_code == 200
+    assert (response.json()["interval"], response.json()["timeout"]) == (60.0, 50.0)
+
+
+def test_patch_of_unknown_monitor_is_404_even_with_invalid_values(
+    client: TestClient,
+) -> None:
+    response = client.patch("/monitors/999", json={"timeout": 100000})
+
+    assert response.status_code == 404

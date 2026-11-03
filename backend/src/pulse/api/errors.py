@@ -13,6 +13,7 @@ from pulse.domain.errors import (
     AuthenticationError,
     DuplicateMonitorError,
     DuplicateUserError,
+    InvalidMonitorError,
     MonitorNotFoundError,
     PermissionDeniedError,
     RateLimitExceededError,
@@ -58,6 +59,19 @@ async def duplicate_user_handler(request: Request, exc: Exception) -> JSONRespon
     # Сюда попадает только DuplicateUserError (см. регистрацию ниже).
     body = ErrorResponse(code="user_already_exists", message=str(exc))
     return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=body.model_dump())
+
+
+async def invalid_monitor_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, InvalidMonitorError)
+    # Тот же вид, что у ошибок схемы запроса: клиент разбирает их одинаково.
+    body = ValidationErrorResponse(
+        code="validation_error",
+        message="Запрос не прошёл проверку",
+        errors=[FieldError(loc=["body", exc.field], type="value_error", msg=str(exc))],
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, content=body.model_dump()
+    )
 
 
 async def authentication_error_handler(
@@ -148,6 +162,7 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(MonitorNotFoundError, monitor_not_found_handler)
     app.add_exception_handler(DuplicateMonitorError, duplicate_monitor_handler)
     app.add_exception_handler(DuplicateUserError, duplicate_user_handler)
+    app.add_exception_handler(InvalidMonitorError, invalid_monitor_handler)
     app.add_exception_handler(AuthenticationError, authentication_error_handler)
     app.add_exception_handler(PermissionDeniedError, permission_denied_handler)
     app.add_exception_handler(RateLimitExceededError, rate_limit_handler)

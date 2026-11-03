@@ -1,8 +1,15 @@
 from datetime import timedelta
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, PlainSerializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    PlainSerializer,
+    field_validator,
+    model_validator,
+)
 
+from pulse.domain.monitors import ensure_timeout_fits_interval
 from pulse.domain.types import DEFAULT_TIMEOUT, Interval, Timeout, Url
 
 # В JSON интервал отдаётся секундами, а не ISO 8601 ("PT5M"): число принимается
@@ -21,6 +28,11 @@ class MonitorCreate(BaseModel):
     url: Url
     interval: Interval
     timeout: Timeout = DEFAULT_TIMEOUT
+
+    @model_validator(mode="after")
+    def _timeout_fits_interval(self) -> "MonitorCreate":
+        ensure_timeout_fits_interval(self.interval, self.timeout)
+        return self
 
 
 class MonitorUpdate(BaseModel):

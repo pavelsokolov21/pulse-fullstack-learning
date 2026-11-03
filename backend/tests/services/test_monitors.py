@@ -2,7 +2,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from pulse.domain.errors import DuplicateMonitorError, MonitorNotFoundError
+from pulse.domain.errors import (
+    DuplicateMonitorError,
+    InvalidMonitorError,
+    MonitorNotFoundError,
+)
 from pulse.domain.monitors import Monitor
 from pulse.domain.users import Role, User
 from pulse.repositories.checks import CheckRepository
@@ -397,3 +401,84 @@ def test_services_over_different_repositories_do_not_share_state() -> None:
     add(first)
 
     assert second.list_all(ALICE) == []
+
+
+# --- согласованность интервала и таймаута -----------------------------------
+
+
+def test_create_rejects_timeout_not_shorter_than_interval(
+    service: MonitorService, repository: MonitorRepository
+) -> None:
+    with pytest.raises(InvalidMonitorError) as exc_info:
+        service.create(
+            ALICE, url="https://a.test", interval=timedelta(seconds=30), timeout=30
+        )
+
+    assert exc_info.value.field == "timeout"
+    assert repository.list_all() == []
+
+
+def test_update_rejects_timeout_that_does_not_fit_the_current_interval(
+    service: MonitorService,
+) -> None:
+    monitor = add(service)  # интервал 5 минут
+
+    with pytest.raises(InvalidMonitorError) as exc_info:
+        service.update(ALICE, monitor.id, timeout=300)
+
+    assert exc_info.value.field == "timeout"
+    assert service.get(ALICE, monitor.id).timeout == 10.0
+
+
+def test_update_rejects_interval_shorter_than_the_current_timeout(
+    service: MonitorService,
+) -> None:
+    monitor = service.create(
+        ALICE, url="https://a.test", interval=FIVE_MINUTES, timeout=100
+    )
+
+    with pytest.raises(InvalidMonitorError) as exc_info:
+        service.update(ALICE, monitor.id, interval=timedelta(seconds=60))
+
+    assert exc_info.value.field == "interval"
+    assert service.get(ALICE, monitor.id).interval == FIVE_MINUTES
+
+
+def test_update_accepts_a_consistent_pair_changed_together(
+    service: MonitorService,
+) -> None:
+    monitor = service.create(
+        ALICE, url="https://a.test", interval=FIVE_MINUTES, timeout=100
+    )
+
+    changed = service.update(
+        ALICE, monitor.id, interval=timedelta(seconds=60), timeout=50
+    )
+
+    assert (changed.interval, changed.timeout) == (timedelta(seconds=60), 50)
+
+
+def test_update_of_other_fields_ignores_the_pair_rule_when_it_holds(
+    service: MonitorService,
+) -> None:
+    monitor = add(service)
+
+    changed = service.update(ALICE, monitor.id, url="https://b.test")
+
+    assert changed.url == "https://b.test"
+
+
+def test_missing_monitor_is_reported_before_invalid_values(
+    service: MonitorService,
+) -> None:
+    with pytest.raises(MonitorNotFoundError):
+        service.update(ALICE, 999, timeout=10_000)
+
+
+def test_foreign_monitor_is_reported_as_missing_not_as_invalid(
+    service: MonitorService,
+) -> None:
+    monitor = add(service, actor=BOB)
+
+    with pytest.raises(MonitorNotFoundError):
+        service.update(ALICE, monitor.id, timeout=10_000)

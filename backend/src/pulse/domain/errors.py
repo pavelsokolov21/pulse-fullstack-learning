@@ -6,6 +6,18 @@ class MonitorNotFoundError(Exception):
         self.monitor_id = monitor_id
 
 
+class InvalidMonitorError(Exception):
+    """Значения монитора не согласуются между собой (например, таймаут >= интервала).
+
+    Поля по отдельности уже проверены типами; здесь правило про их сочетание,
+    которое при PATCH видно только сервису: он знает и новые, и прежние значения.
+    """
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
 class DuplicateMonitorError(Exception):
     """Монитор с таким URL уже есть."""
 
