@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
 from typing import Annotated
 
@@ -16,6 +16,7 @@ from pulse.domain.errors import (
 )
 from pulse.domain.users import Role, User
 from pulse.repositories.checks import CheckRepository
+from pulse.repositories.database import Session, SessionFactory
 from pulse.repositories.monitors import MonitorRepository
 from pulse.repositories.refresh_tokens import RefreshTokenRepository
 from pulse.repositories.users import UserRepository
@@ -34,24 +35,45 @@ async def get_api_settings(request: Request) -> ApiSettings:
     return settings
 
 
-async def get_monitor_repository(request: Request) -> MonitorRepository:
-    repository: MonitorRepository = request.app.state.monitor_repository
-    return repository
+SettingsDep = Annotated[ApiSettings, Depends(get_api_settings)]
 
 
-async def get_check_repository(request: Request) -> CheckRepository:
-    repository: CheckRepository = request.app.state.check_repository
-    return repository
+async def get_session(request: Request) -> AsyncIterator[Session]:
+    """Сессия базы на один запрос: одна транзакция, коммит при успехе.
+
+    Если обработчик бросил исключение (в том числе доменное: 404, 409), коммита нет,
+    и `close()` откатывает всё сделанное. Аналог транзакционного interceptor в
+    NestJS. Все репозитории запроса делят эту сессию, поэтому запрос либо
+    сохраняется целиком, либо не сохраняется вовсе.
+    """
+    factory: SessionFactory = request.app.state.session_factory
+    async with factory() as session:
+        yield session
+        await session.commit()
 
 
-async def get_user_repository(request: Request) -> UserRepository:
-    repository: UserRepository = request.app.state.user_repository
-    return repository
+# scope="function": код после yield (коммит) выполняется, как только отработал
+# обработчик, ДО отправки ответа. Со scope по умолчанию он шёл бы после отправки, и
+# клиент получил бы 201, даже если коммит потом упал.
+SessionDep = Annotated[Session, Depends(get_session, scope="function")]
 
 
-async def get_refresh_token_repository(request: Request) -> RefreshTokenRepository:
-    repository: RefreshTokenRepository = request.app.state.refresh_token_repository
-    return repository
+async def get_monitor_repository(session: SessionDep) -> MonitorRepository:
+    return MonitorRepository(session)
+
+
+async def get_check_repository(
+    session: SessionDep, settings: SettingsDep
+) -> CheckRepository:
+    return CheckRepository(session, settings.max_checks_per_monitor)
+
+
+async def get_user_repository(session: SessionDep) -> UserRepository:
+    return UserRepository(session)
+
+
+async def get_refresh_token_repository(session: SessionDep) -> RefreshTokenRepository:
+    return RefreshTokenRepository(session)
 
 
 async def get_login_rate_limiter(request: Request) -> SlidingWindowRateLimiter:
@@ -69,7 +91,6 @@ async def get_http_client(request: Request) -> httpx.AsyncClient:
     return client
 
 
-SettingsDep = Annotated[ApiSettings, Depends(get_api_settings)]
 MonitorRepositoryDep = Annotated[MonitorRepository, Depends(get_monitor_repository)]
 CheckRepositoryDep = Annotated[CheckRepository, Depends(get_check_repository)]
 UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
@@ -83,12 +104,10 @@ PasswordHasherDep = Annotated[PasswordHasher, Depends(get_password_hasher)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(get_http_client)]
 
 
-async def get_monitor_service(
-    monitors: MonitorRepositoryDep, checks: CheckRepositoryDep
-) -> MonitorService:
+async def get_monitor_service(monitors: MonitorRepositoryDep) -> MonitorService:
     # Сервис без собственного состояния: дёшево собирать на каждый запрос, а
-    # репозитории (состояние) приходят снаружи и подменяются отдельно.
-    return MonitorService(monitors, checks)
+    # репозитории (сессия базы) приходят снаружи и подменяются отдельно.
+    return MonitorService(monitors)
 
 
 MonitorServiceDep = Annotated[MonitorService, Depends(get_monitor_service)]
@@ -148,7 +167,7 @@ async def get_current_user(
     # Пустой токен («Authorization: Bearer» без значения) то же, что отсутствующий.
     if not token:
         raise MissingTokenError
-    return auth.authenticate(token)
+    return await auth.authenticate(token)
 
 
 CurrentUserDep = Annotated[User, Depends(get_current_user)]

@@ -1,10 +1,15 @@
 -- Схема Pulse для PostgreSQL 18.
 --
+-- ЭТО БАЗОВАЯ СХЕМА (миграция 0001). Применяет её Alembic: migrations/versions/
+-- 0001_initial.py читает этот файл. После выпуска миграции файл НЕ ПРАВЯТ: любое
+-- изменение схемы это новая миграция (`uv run alembic revision --autogenerate`).
+--
 -- Порядок применения (подробно в README):
 --   1. roles.sql   суперпользователем: роли pulse_migrator (владелец, DDL) и
 --                  pulse_app (приложение). Роли общие на весь кластер.
 --   2. создать пустую базу с владельцем pulse_migrator.
---   3. schema.sql  ОТ ИМЕНИ pulse_migrator: он станет владельцем таблиц.
+--   3. `alembic upgrade head` ОТ ИМЕНИ pulse_migrator: он станет владельцем таблиц.
+--      (Вручную тоже можно: psql -f schema.sql, но тогда Alembic не знает версию.)
 -- Приложение подключается как pulse_app и не владеет ничем: права в конце файла.
 -- Сбросить (только локально!):
 --   DROP SCHEMA public CASCADE; CREATE SCHEMA public;

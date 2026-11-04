@@ -2,14 +2,17 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import psycopg
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
+from sqlalchemy import text
 
 from pulse.api.deps import (
     RefreshTokenRepositoryDep,
+    SessionDep,
     get_current_user,
     get_login_rate_limiter,
     get_password_hasher,
@@ -21,13 +24,51 @@ from pulse.api.settings import ApiSettings
 from pulse.core.passwords import PasswordHasher
 from pulse.core.rate_limit import SlidingWindowRateLimiter
 from pulse.domain.users import Role, User
-from pulse.repositories.users import UserRepository
 from pulse.services.refresh_tokens import RefreshTokenService
 from pulse.services.tokens import TokenService
 
-TEST_USER = User(
-    id=1, email="tester@example.com", password_hash="not-a-real-hash", role=Role.MANAGER
-)
+TEST_EMAIL = "tester@example.com"
+
+
+@pytest.fixture(autouse=True)
+def _clean_database(clean_database: None) -> None:
+    """В каждом тесте API база пуста, а нумерация id начинается с 1."""
+
+
+async def current_test_user(session: SessionDep) -> User:
+    """Подмена `get_current_user`: тестовый менеджер, созданный при первом обращении.
+
+    Строка в `users` нужна по-настоящему: мониторы ссылаются на владельца внешним
+    ключом. Создаётся лениво, чтобы тесты авторизации (они считают пользователей
+    и id) не находили лишнюю запись.
+    """
+    await session.execute(
+        text(
+            "INSERT INTO users (email, password_hash, role)"
+            " SELECT :email, 'not-a-real-hash', 'manager'"
+            " WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = :email)"
+        ),
+        {"email": TEST_EMAIL},
+    )
+    user_id = await session.scalar(
+        text("SELECT id FROM users WHERE email = :email"), {"email": TEST_EMAIL}
+    )
+    assert user_id is not None
+    return User(id=user_id, email=TEST_EMAIL, password_hash="x", role=Role.MANAGER)
+
+
+LoggedIn = Callable[[FastAPI], FastAPI]
+
+
+@pytest.fixture
+def logged_in() -> LoggedIn:
+    """Подменяет вход в отдельном приложении (общий `app` подменён автоматически)."""
+
+    def apply(application: FastAPI) -> FastAPI:
+        application.dependency_overrides[get_current_user] = current_test_user
+        return application
+
+    return apply
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +78,7 @@ def authenticated_user() -> Iterator[None]:
     Авторизацию проверяют отдельные тесты (`test_auth*.py`, `test_protection.py`)
     на собственных приложениях без подмены.
     """
-    app.dependency_overrides[get_current_user] = lambda: TEST_USER
+    app.dependency_overrides[get_current_user] = current_test_user
     yield
     app.dependency_overrides.pop(get_current_user, None)
 
@@ -107,17 +148,21 @@ SignIn = Callable[..., dict[str, str]]
 
 
 @pytest.fixture
-def sign_in(auth_app: FastAPI, auth_client: TestClient) -> SignIn:
+def sign_in(
+    auth_client: TestClient, admin_db: psycopg.Connection[tuple[object, ...]]
+) -> SignIn:
     """Создаёт пользователя с нужной ролью и возвращает заголовок с его токеном.
 
     Роль через API не выдаётся (регистрация всегда создаёт менеджера), поэтому
-    пользователь кладётся прямо в репозиторий, а вход идёт настоящим запросом.
+    пользователь кладётся прямо в базу, а вход идёт настоящим запросом.
     """
     cheap = PasswordHash((Argon2Hasher(time_cost=1, memory_cost=8, parallelism=1),))
 
     def _sign_in(email: str, role: Role = Role.MANAGER) -> dict[str, str]:
-        users: UserRepository = auth_app.state.user_repository
-        users.create(email=email, password_hash=cheap.hash(PASSWORD), role=role)
+        admin_db.execute(
+            "INSERT INTO users (email, password_hash, role) VALUES (%s, %s, %s)",
+            (email, cheap.hash(PASSWORD), role.value),
+        )
         response = auth_client.post(
             "/auth/login", data={"username": email, "password": PASSWORD}
         )

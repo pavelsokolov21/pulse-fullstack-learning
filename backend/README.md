@@ -56,6 +56,16 @@ uv run poe check    # ruff + pyright (strict) + pytest
 
 По отдельности: `uv run poe lint`, `uv run poe types`, `uv run poe test`, `uv run poe watch` (тесты при изменении файлов).
 
+### Тесты и база
+
+Тесты репозиториев, сервисов и API идут в настоящий PostgreSQL: ограничения схемы, права ролей и гонки нельзя проверить на подделке. Нужен запущенный сервер (`docker compose up -d db`) и корневой `.env` (`cp .env.example .env`): из него тесты берут логин и пароль суперпользователя. Иначе задайте `PULSE_TEST_DATABASE_URL=postgresql+psycopg://ЛОГИН:ПАРОЛЬ@127.0.0.1:5432/pulse_test`.
+
+Что делают тесты сами: создают базу `pulse_test` (имя обязано кончаться на `_test`, в ней стирают данные), применяют миграции Alembic (`alembic upgrade head`, как в бою) и пересоздают схему, когда изменился `schema.sql` или файл миграции. Приложение в тестах подключается ролью `pulse_app`, поэтому права из схемы действуют и там (например, `UPDATE checks` запрещён).
+
+- **Репозитории и сервисы:** каждый тест идёт в транзакции, которая откатывается в конце (`session` в `tests/conftest.py`). Идентификаторы после отката не возвращаются: не ждите конкретных id.
+- **API:** `TestClient` запускает приложение в своём потоке и event loop, делить с ним одну транзакцию нельзя. Поэтому перед каждым тестом и после него таблицы очищаются (`TRUNCATE ... RESTART IDENTITY`), и нумерация id снова с 1.
+- **Гонки** (`tests/services/test_concurrency.py`): отдельные соединения и настоящие коммиты.
+
 ## Структура
 
 Слои зависят только вниз: `api → services → repositories → domain`. `core` не зависит ни от кого, `checks` и `cli` стоят сбоку. Направление импортов проверяет `tests/test_architecture.py`.
@@ -67,7 +77,7 @@ src/pulse/
     routers/      обработчики эндпоинтов
     schemas/      тела запросов и ответов (Create / Update / Read)
   services/       операции над мониторами, бизнес-правила
-  repositories/   хранение (сейчас в памяти, в фазе 2 PostgreSQL)
+  repositories/   хранение: SQLAlchemy 2.0 (async) и PostgreSQL; ORM-модели не выходят за этот слой
   domain/         сущности, общие типы с валидацией, доменные ошибки
   checks/         проверка URL: runner, скользящее окно, статистика
   cli/            команда `pulse check`, загрузка мониторов из TOML
@@ -75,27 +85,29 @@ src/pulse/
 tests/            зеркалит структуру src/pulse/
 ```
 
-Запуск API: нужен секрет подписи JWT (без него приложение не стартует).
+Запуск API: нужны секрет подписи JWT и адрес базы (без них приложение не стартует). Схему базы сначала нужно создать, см. «Схему БД» ниже. Приложение ходит в базу ролью `pulse_app` (не суперпользователем), пароль тот, что вы передали в `roles.sql`.
 
 ```bash
 export PULSE_API_JWT_SECRET=$(openssl rand -hex 32)   # не короче 32 символов
+export PULSE_API_DATABASE_URL='postgresql+psycopg://pulse_app:ПАРОЛЬ@127.0.0.1:5432/pulse_schema'
 uv run poe dev                                         # http://127.0.0.1:8000/docs
 ```
 
 ## Схема БД (PostgreSQL)
 
-Файлы в [db/](db/): [roles.sql](db/roles.sql) (роли), [schema.sql](db/schema.sql) (DDL: `users`, `refresh_tokens`, `monitors`, `checks`, `incidents`, `channels`, `monitor_channels`, `audit_log`) и [constraints_test.sql](db/constraints_test.sql) (по тесту на каждое ограничение и право, всё в транзакции с откатом). Правила записаны в самой схеме (NOT NULL, UNIQUE, CHECK, внешние ключи с явным `ON DELETE`, `EXCLUDE`), у каждого ограничения есть имя.
+Файлы в [db/](db/): [roles.sql](db/roles.sql) (роли), [schema.sql](db/schema.sql) (базовый DDL, применяется первой миграцией Alembic: `users`, `refresh_tokens`, `monitors`, `checks`, `incidents`, `channels`, `monitor_channels`, `audit_log`) и [constraints_test.sql](db/constraints_test.sql) (по тесту на каждое ограничение и право, всё в транзакции с откатом). Правила записаны в самой схеме (NOT NULL, UNIQUE, CHECK, внешние ключи с явным `ON DELETE`, `EXCLUDE`), у каждого ограничения есть имя.
 
 Логин и пароль суперпользователя Postgres хранятся не в репозитории, а в `.env` в корне (он в `.gitignore`). Перед первым запуском: `cp .env.example .env` и задайте `POSTGRES_PASSWORD`. Без него `docker compose` не стартует. В командах ниже `-U pulse` это значение `POSTGRES_USER`. Postgres применяет эти значения только при создании тома `pgdata`: смена пароля в `.env` для существующей базы ничего не меняет (для этого `ALTER ROLE`, либо `docker compose down -v` с потерей данных).
 
-Применять нужно в отдельную базу: в `seed.sql` из корня репозитория (учебные запросы) тоже есть таблицы `monitors` и `checks`, и они бы столкнулись. Порядок важен: роли, база с владельцем `pulse_migrator`, схема от его имени, тесты суперпользователем.
+Применять нужно в отдельную базу: в `seed.sql` из корня репозитория (учебные запросы) тоже есть таблицы `monitors` и `checks`, и они бы столкнулись. Порядок важен: роли, база с владельцем `pulse_migrator`, миграции от его имени, проверки суперпользователем.
 
 ```bash
 docker compose up -d db
 docker compose exec -T db psql -U pulse -d postgres -v ON_ERROR_STOP=1 \
   -v migrator_password=migrator -v app_password=app < db/roles.sql
 docker compose exec -T db psql -U pulse -d postgres -c 'CREATE DATABASE pulse_schema OWNER pulse_migrator'
-docker compose exec -T db psql -U pulse_migrator -d pulse_schema -v ON_ERROR_STOP=1 < db/schema.sql
+PULSE_MIGRATE_DATABASE_URL='postgresql+psycopg://pulse_migrator:migrator@127.0.0.1:5432/pulse_schema' \
+  uv run alembic upgrade head
 docker compose exec -T db psql -U pulse -d pulse_schema -v ON_ERROR_STOP=1 < db/constraints_test.sql
 # ... 150 проверок пройдено
 ```
@@ -110,6 +122,29 @@ docker compose exec -T db psql -U pulse -d pulse_schema -v ON_ERROR_STOP=1 < db/
 - **Инциденты.** `EXCLUDE USING gist` запрещает пересечение инцидентов монитора, в том числе второй открытый (нужно расширение `btree_gist`, оно уже в образе `postgres`).
 - **`checks.ok`** вычисляется из `status_code` (столбец `GENERATED ... STORED`), поэтому не может разойтись с ним.
 - **Индексы** только под ограничения, внешние ключи и запрос «последние проверки монитора». Остальные после `EXPLAIN ANALYZE` на данных. Составной ключ инцидентов требует `UNIQUE (id, monitor_id)` на `checks`: это ещё один индекс на самой большой таблице.
+
+### Миграции (Alembic)
+
+Схему меняют только миграции; приложение их не запускает. Выполняет их роль `pulse_migrator` (владелец таблиц), поэтому адрес берётся из отдельной переменной `PULSE_MIGRATE_DATABASE_URL` (в нём пароль, в репозиторий не кладите). Файлы: [alembic.ini](alembic.ini), [migrations/env.py](migrations/env.py), [migrations/versions/](migrations/versions/).
+
+```bash
+export PULSE_MIGRATE_DATABASE_URL='postgresql+psycopg://pulse_migrator:ПАРОЛЬ@127.0.0.1:5432/pulse_schema'
+uv run alembic upgrade head              # применить всё
+uv run alembic upgrade head --sql        # только напечатать SQL, базу не трогать
+uv run alembic current                   # какая версия сейчас в базе
+uv run alembic history                   # список миграций
+uv run alembic downgrade -1              # откатить последнюю
+uv run alembic revision --autogenerate --rev-id 0002 -m "add foo"   # новая по моделям
+uv run alembic check                     # модели и база совпадают? (падает при расхождении)
+```
+
+Как работать:
+
+- **Правка модели → миграция.** Изменили `repositories/models.py`, сгенерировали `revision --autogenerate`, **прочитали** сгенерированный файл и поправили руками: автогенерация не видит CHECK, не отличает переименование от «удалить и создать», не знает про данные. Для таблицы с данными в бою нужна безопасная последовательность (добавить столбец допускающим NULL, заполнить, потом `NOT NULL`).
+- **`alembic check`** в тестах (`tests/migrations`) падает, если модели ORM разошлись с миграциями: забыли миграцию или забыли модель.
+- **Не описаны моделями** `incidents`, `channels`, `monitor_channels`, `audit_log`: приложение их пока не использует, автогенерация их игнорирует (`include_object` в `env.py`). Добавите модель, и они попадут под сравнение.
+- **Базовая миграция** `0001` применяет `db/schema.sql` как есть, потому что в нём комментарии о каждом решении и вещи, которые автогенерация не умеет: `EXCLUDE`, `GENERATED`, `GRANT`, составные ключи с `ON DELETE SET NULL (столбец)`. Файл после выпуска миграции не правят.
+- **Откат** `0001` удаляет таблицы, но не расширение `btree_gist` и не роли: они общие.
 
 ### Тестовые данные (Faker)
 
@@ -149,14 +184,14 @@ uv run python db/seed.py --users 100 --checks 500 --seed 7
 | `POST /auth/logout`              | отзывает сессию и сбрасывает cookie (204, повторный вызов тоже 204) |
 | `GET /auth/me`                   | текущий пользователь по токену                  |
 | `POST /monitors`                 | создать монитор (201; 409, если URL уже есть; 422, если интервал вне 30 с..24 ч или таймаут не короче интервала) |
-| `GET /monitors`                  | список мониторов                                |
+| `GET /monitors`                  | страница мониторов `{items, total, limit, offset}` с `owner_email` у каждого; `?limit=1..100` (по умолчанию 20), `?offset=0..`; админу все, остальным свои |
 | `GET /monitors/{id}`             | один монитор (404, если нет)                    |
 | `PATCH /monitors/{id}`           | изменить переданные поля                        |
 | `DELETE /monitors/{id}`          | удалить монитор и его проверки (204)            |
 | `POST /monitors/{id}/checks`     | проверить монитор сейчас (201)                  |
 | `GET /monitors/{id}/checks`      | последние проверки, `?limit=1..100` (по умолчанию 20) |
 
-Данные (в том числе пользователи) живут в памяти процесса и пропадают при перезапуске; токены при этом перестают подходить, так как пользователей уже нет. Все ошибки имеют вид `{"code": ..., "message": ...}`, а у каждого ответа есть заголовок `X-Request-ID`.
+Данные (в том числе пользователи и сессии) лежат в PostgreSQL и переживают перезапуск. Запрос работает в одной транзакции: она фиксируется, когда обработчик завершился успешно, и откатывается при любой ошибке. Все ошибки имеют вид `{"code": ..., "message": ...}`, а у каждого ответа есть заголовок `X-Request-ID`.
 
 ### Схема OpenAPI и клиент фронтенда
 
@@ -191,6 +226,7 @@ PULSE_API_REFRESH_COOKIE_PATH=/api/auth uv run poe dev
 | `PULSE_API_ENVIRONMENT`           | `dev`        | `dev` или `prod`; в `prod` отключены `/docs` и `/redoc` |
 | `PULSE_API_LOG_LEVEL`             | `INFO`       | уровень логов `pulse.*`: DEBUG, INFO, WARNING, ERROR, CRITICAL |
 | `PULSE_API_MAX_CHECKS_PER_MONITOR` | `100`       | сколько последних проверок хранить на монитор (>= 1)    |
+| `PULSE_API_DATABASE_URL`          | обязательно  | адрес PostgreSQL ролью `pulse_app`: `postgresql+psycopg://логин:пароль@хост:порт/база` (содержит пароль, в репозиторий не кладите) |
 | `PULSE_API_JWT_SECRET`            | обязательно  | ключ подписи JWT (HS256), не короче 32 символов         |
 | `PULSE_API_ACCESS_TOKEN_TTL_MINUTES` | `15`      | срок жизни access-токена, минуты (>= 1)                 |
 | `PULSE_API_REFRESH_TOKEN_TTL_DAYS` | `7`         | срок жизни refresh-токена, дни (>= 1)                   |

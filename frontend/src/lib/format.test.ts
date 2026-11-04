@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatInterval } from "@/lib/format";
+import { formatInterval, formatRole } from "@/lib/format";
 
 describe("formatInterval", () => {
   it.each([
@@ -13,5 +13,19 @@ describe("formatInterval", () => {
     [5400, "90 мин"],
   ])("%i seconds -> %s", (seconds, expected) => {
     expect(formatInterval(seconds)).toBe(expected);
+  });
+});
+
+describe("formatRole", () => {
+  it.each([
+    ["admin", "администратор"],
+    ["manager", "менеджер"],
+    ["viewer", "наблюдатель"],
+  ])("%s -> %s", (role, expected) => {
+    expect(formatRole(role)).toBe(expected);
+  });
+
+  it("shows an unknown role as is", () => {
+    expect(formatRole("auditor")).toBe("auditor");
   });
 });

@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -7,13 +8,16 @@ from pulse.domain.errors import (
     InvalidMonitorError,
     MonitorNotFoundError,
 )
-from pulse.domain.monitors import Monitor
+from pulse.domain.monitors import Monitor, MonitorWithOwner
 from pulse.domain.users import Role, User
 from pulse.repositories.checks import CheckRepository
+from pulse.repositories.database import Session
 from pulse.repositories.monitors import MonitorRepository
 from pulse.services.monitors import MonitorService
 
 FIVE_MINUTES = timedelta(minutes=5)
+# Заведомо не выданный identity-ключ: id не восстанавливаются после отката теста.
+UNKNOWN_ID = 2_000_000_000
 
 ALICE = User(1, "alice@example.com", "h", Role.MANAGER)
 BOB = User(2, "bob@example.com", "h", Role.MANAGER)
@@ -21,83 +25,131 @@ ADMIN = User(3, "admin@example.com", "h", Role.ADMIN)
 VIEWER = User(4, "viewer@example.com", "h", Role.VIEWER)
 
 
-@pytest.fixture
-def repository() -> MonitorRepository:
-    return MonitorRepository()
+@pytest.fixture(autouse=True)
+async def _owners(persist_users: Callable[..., Awaitable[None]]) -> None:
+    """Владельцы мониторов существуют в базе с теми же id, что у констант выше."""
+    await persist_users(ALICE, BOB, ADMIN, VIEWER)
 
 
 @pytest.fixture
-def check_repository() -> CheckRepository:
-    return CheckRepository()
+def repository(session: Session) -> MonitorRepository:
+    return MonitorRepository(session)
 
 
 @pytest.fixture
-def service(
-    repository: MonitorRepository, check_repository: CheckRepository
-) -> MonitorService:
-    return MonitorService(repository, check_repository)
+def check_repository(session: Session) -> CheckRepository:
+    return CheckRepository(session)
 
 
-def add(
+@pytest.fixture
+def service(repository: MonitorRepository) -> MonitorService:
+    return MonitorService(repository)
+
+
+def plain(monitor: MonitorWithOwner) -> Monitor:
+    return Monitor(
+        monitor.id, monitor.owner_id, monitor.url, monitor.interval, monitor.timeout
+    )
+
+
+async def listed(service: MonitorService, actor: User) -> list[Monitor]:
+    page = await service.list_page(actor, limit=1000, offset=0)
+    return [plain(m) for m in page.items]
+
+
+async def listed_by_repository(repository: MonitorRepository) -> list[Monitor]:
+    page = await repository.list_page(owner_id=None, limit=1000, offset=0)
+    return [plain(m) for m in page.items]
+
+
+async def add(
     service: MonitorService, url: str = "https://a.test", actor: User = ALICE
 ) -> Monitor:
-    return service.create(actor, url=url, interval=FIVE_MINUTES, timeout=10.0)
+    return await service.create(actor, url=url, interval=FIVE_MINUTES, timeout=10.0)
 
 
 # --- создание и чтение ------------------------------------------------------
 
 
-def test_create_stores_monitor_in_repository(
+async def test_create_stores_monitor_in_repository(
     service: MonitorService, repository: MonitorRepository
 ) -> None:
-    created = add(service)
+    created = await add(service)
 
-    assert repository.get(created.id) == created
-
-
-def test_creator_becomes_the_owner(service: MonitorService) -> None:
-    assert add(service, actor=BOB).owner_id == BOB.id
+    assert await repository.get(created.id) == created
 
 
-def test_admin_owns_what_admin_creates(service: MonitorService) -> None:
-    assert add(service, actor=ADMIN).owner_id == ADMIN.id
+async def test_creator_becomes_the_owner(service: MonitorService) -> None:
+    assert (await add(service, actor=BOB)).owner_id == BOB.id
 
 
-def test_get_returns_own_monitor(service: MonitorService) -> None:
-    created = add(service)
-
-    assert service.get(ALICE, created.id) == created
+async def test_admin_owns_what_admin_creates(service: MonitorService) -> None:
+    assert (await add(service, actor=ADMIN)).owner_id == ADMIN.id
 
 
-def test_list_returns_only_own_monitors(service: MonitorService) -> None:
-    mine = add(service, "https://a.test", ALICE)
-    add(service, "https://b.test", BOB)
+async def test_get_returns_own_monitor(service: MonitorService) -> None:
+    created = await add(service)
 
-    assert service.list_all(ALICE) == [mine]
-    assert [m.url for m in service.list_all(BOB)] == ["https://b.test"]
+    assert await service.get(ALICE, created.id) == created
 
 
-def test_list_of_user_without_monitors_is_empty(service: MonitorService) -> None:
-    add(service, actor=ALICE)
+async def test_list_returns_only_own_monitors(service: MonitorService) -> None:
+    mine = await add(service, "https://a.test", ALICE)
+    await add(service, "https://b.test", BOB)
 
-    assert service.list_all(BOB) == []
+    assert await listed(service, ALICE) == [mine]
+    assert [m.url for m in await listed(service, BOB)] == ["https://b.test"]
 
 
-def test_admin_lists_every_monitor(service: MonitorService) -> None:
-    first = add(service, "https://a.test", ALICE)
-    second = add(service, "https://b.test", BOB)
+async def test_list_of_user_without_monitors_is_empty(service: MonitorService) -> None:
+    await add(service, actor=ALICE)
 
-    assert service.list_all(ADMIN) == [first, second]
+    assert await listed(service, BOB) == []
+
+
+async def test_admin_lists_every_monitor(service: MonitorService) -> None:
+    first = await add(service, "https://a.test", ALICE)
+    second = await add(service, "https://b.test", BOB)
+
+    assert await listed(service, ADMIN) == [first, second]
+
+
+async def test_page_of_a_manager_has_only_own_monitors_and_total(
+    service: MonitorService,
+) -> None:
+    await add(service, "https://a.test", ALICE)
+    await add(service, "https://b.test", ALICE)
+    await add(service, "https://c.test", BOB)
+
+    page = await service.list_page(ALICE, limit=1, offset=0)
+
+    assert (len(page.items), page.total) == (1, 2)
+    assert page.items[0].owner_email == ALICE.email
+
+
+async def test_page_of_an_admin_has_every_monitor_with_owner_emails(
+    service: MonitorService,
+) -> None:
+    await add(service, "https://a.test", ALICE)
+    await add(service, "https://b.test", BOB)
+
+    page = await service.list_page(ADMIN, limit=10, offset=0)
+
+    assert page.total == 2
+    assert [(m.url, m.owner_email) for m in page.items] == [
+        ("https://a.test", ALICE.email),
+        ("https://b.test", BOB.email),
+    ]
 
 
 # --- чужие мониторы (IDOR) -------------------------------------------------
 
 
 @pytest.mark.parametrize("operation", ["get", "update", "delete"])
-def test_foreign_monitor_looks_like_a_missing_one(
+async def test_foreign_monitor_looks_like_a_missing_one(
     service: MonitorService, operation: str
 ) -> None:
-    foreign = add(service, actor=ALICE)
+    foreign = await add(service, actor=ALICE)
     calls = {
         "get": lambda: service.get(BOB, foreign.id),
         "update": lambda: service.update(BOB, foreign.id, timeout=1.0),
@@ -105,380 +157,372 @@ def test_foreign_monitor_looks_like_a_missing_one(
     }
 
     with pytest.raises(MonitorNotFoundError) as exc_info:
-        calls[operation]()
+        await calls[operation]()
 
     # Тот же текст, что у несуществующего id: ответ не выдаёт, что монитор есть.
     assert str(exc_info.value) == str(MonitorNotFoundError(foreign.id))
 
 
-def test_foreign_monitor_error_is_identical_to_unknown_id_error(
+async def test_foreign_monitor_error_is_identical_to_unknown_id_error(
     service: MonitorService,
 ) -> None:
-    foreign = add(service, actor=ALICE)
+    foreign = await add(service, actor=ALICE)
 
     with pytest.raises(MonitorNotFoundError) as foreign_error:
-        service.get(BOB, foreign.id)
+        await service.get(BOB, foreign.id)
     with pytest.raises(MonitorNotFoundError) as unknown_error:
-        service.get(BOB, 999)
+        await service.get(BOB, UNKNOWN_ID)
 
     assert type(foreign_error.value) is type(unknown_error.value)
     assert str(foreign_error.value).replace(str(foreign.id), "N") == str(
         unknown_error.value
-    ).replace("999", "N")
+    ).replace(str(UNKNOWN_ID), "N")
 
 
-def test_foreign_monitor_is_not_changed_or_deleted(
+async def test_foreign_monitor_is_not_changed_or_deleted(
     service: MonitorService, repository: MonitorRepository
 ) -> None:
-    foreign = add(service, actor=ALICE)
+    foreign = await add(service, actor=ALICE)
 
     with pytest.raises(MonitorNotFoundError):
-        service.update(BOB, foreign.id, timeout=1.0)
+        await service.update(BOB, foreign.id, timeout=1.0)
     with pytest.raises(MonitorNotFoundError):
-        service.delete(BOB, foreign.id)
+        await service.delete(BOB, foreign.id)
 
-    assert repository.get(foreign.id) == foreign
+    assert await repository.get(foreign.id) == foreign
 
 
 @pytest.mark.parametrize("role", [Role.MANAGER, Role.VIEWER])
-def test_non_admin_cannot_reach_foreign_monitor(
+async def test_non_admin_cannot_reach_foreign_monitor(
     service: MonitorService, role: Role
 ) -> None:
-    foreign = add(service, actor=ALICE)
+    foreign = await add(service, actor=ALICE)
     stranger = User(9, "s@example.com", "h", role)
 
     with pytest.raises(MonitorNotFoundError):
-        service.get(stranger, foreign.id)
+        await service.get(stranger, foreign.id)
 
 
-def test_admin_reaches_any_monitor(service: MonitorService) -> None:
-    foreign = add(service, actor=ALICE)
+async def test_admin_reaches_any_monitor(service: MonitorService) -> None:
+    foreign = await add(service, actor=ALICE)
 
-    assert service.get(ADMIN, foreign.id) == foreign
-    assert service.update(ADMIN, foreign.id, timeout=2.0).timeout == 2.0
-
-
-def test_admin_edit_does_not_change_the_owner(service: MonitorService) -> None:
-    foreign = add(service, actor=ALICE)
-
-    assert service.update(ADMIN, foreign.id, timeout=2.0).owner_id == ALICE.id
+    assert await service.get(ADMIN, foreign.id) == foreign
+    assert (await service.update(ADMIN, foreign.id, timeout=2.0)).timeout == 2.0
 
 
-def test_admin_can_delete_foreign_monitor(service: MonitorService) -> None:
-    foreign = add(service, actor=ALICE)
+async def test_admin_edit_does_not_change_the_owner(service: MonitorService) -> None:
+    foreign = await add(service, actor=ALICE)
 
-    service.delete(ADMIN, foreign.id)
-
-    assert service.list_all(ADMIN) == []
+    assert (await service.update(ADMIN, foreign.id, timeout=2.0)).owner_id == ALICE.id
 
 
-def test_viewer_can_read_what_they_own(service: MonitorService) -> None:
+async def test_admin_can_delete_foreign_monitor(service: MonitorService) -> None:
+    foreign = await add(service, actor=ALICE)
+
+    await service.delete(ADMIN, foreign.id)
+
+    assert await listed(service, ADMIN) == []
+
+
+async def test_viewer_can_read_what_they_own(service: MonitorService) -> None:
     # Роль ограничивает действия (это проверяет require_role), а не доступ к
     # собственным объектам: понижённый менеджер продолжает видеть свои мониторы.
-    owned = add(service, actor=VIEWER)
+    owned = await add(service, actor=VIEWER)
 
-    assert service.get(VIEWER, owned.id) == owned
-    assert service.list_all(VIEWER) == [owned]
+    assert await service.get(VIEWER, owned.id) == owned
+    assert await listed(service, VIEWER) == [owned]
 
 
 # --- обновление ------------------------------------------------------------
 
 
-def test_update_changes_only_given_fields(service: MonitorService) -> None:
-    created = add(service)
+async def test_update_changes_only_given_fields(service: MonitorService) -> None:
+    created = await add(service)
 
-    updated = service.update(ALICE, created.id, timeout=3.0)
+    updated = await service.update(ALICE, created.id, timeout=3.0)
 
     assert updated == Monitor(created.id, ALICE.id, created.url, FIVE_MINUTES, 3.0)
-    assert service.get(ALICE, created.id) == updated
+    assert await service.get(ALICE, created.id) == updated
 
 
-def test_update_without_fields_keeps_monitor(service: MonitorService) -> None:
-    created = add(service)
+async def test_update_without_fields_keeps_monitor(service: MonitorService) -> None:
+    created = await add(service)
 
-    assert service.update(ALICE, created.id) == created
+    assert await service.update(ALICE, created.id) == created
 
 
-def test_delete_removes_monitor(service: MonitorService) -> None:
-    created = add(service)
+async def test_delete_removes_monitor(service: MonitorService) -> None:
+    created = await add(service)
 
-    service.delete(ALICE, created.id)
+    await service.delete(ALICE, created.id)
 
-    assert service.list_all(ALICE) == []
+    assert await listed(service, ALICE) == []
 
 
 @pytest.mark.parametrize("operation", ["get", "update", "delete"])
-def test_unknown_id_raises_not_found(service: MonitorService, operation: str) -> None:
+async def test_unknown_id_raises_not_found(
+    service: MonitorService, operation: str
+) -> None:
     calls = {
-        "get": lambda: service.get(ALICE, 7),
-        "update": lambda: service.update(ALICE, 7, timeout=1.0),
-        "delete": lambda: service.delete(ALICE, 7),
+        "get": lambda: service.get(ALICE, UNKNOWN_ID),
+        "update": lambda: service.update(ALICE, UNKNOWN_ID, timeout=1.0),
+        "delete": lambda: service.delete(ALICE, UNKNOWN_ID),
     }
 
     with pytest.raises(MonitorNotFoundError):
-        calls[operation]()
+        await calls[operation]()
 
 
 # --- дубликаты URL: уникальность (owner_id, url) ---------------------------
 
 
-def test_create_rejects_duplicate_url_of_the_same_owner(
+async def test_create_rejects_duplicate_url_of_the_same_owner(
     service: MonitorService,
 ) -> None:
-    existing = add(service, "https://a.test")
+    existing = await add(service, "https://a.test")
 
     with pytest.raises(DuplicateMonitorError) as exc_info:
-        add(service, "https://a.test")
+        await add(service, "https://a.test")
 
     assert exc_info.value.url == "https://a.test"
     assert exc_info.value.existing_id == existing.id
 
 
-def test_same_url_is_allowed_for_different_owners(service: MonitorService) -> None:
-    add(service, "https://a.test", ALICE)
-
-    assert add(service, "https://a.test", BOB).owner_id == BOB.id
-
-
-def test_duplicate_error_never_exposes_a_foreign_monitor_id(
+async def test_same_url_is_allowed_for_different_owners(
     service: MonitorService,
 ) -> None:
-    add(service, "https://a.test", ALICE)
+    await add(service, "https://a.test", ALICE)
+
+    assert (await add(service, "https://a.test", BOB)).owner_id == BOB.id
+
+
+async def test_duplicate_error_never_exposes_a_foreign_monitor_id(
+    service: MonitorService,
+) -> None:
+    await add(service, "https://a.test", ALICE)
 
     # У Боба такого URL нет: конфликта нет, и id чужого монитора не раскрывается.
-    created = add(service, "https://a.test", BOB)
+    created = await add(service, "https://a.test", BOB)
 
     assert created.owner_id == BOB.id
 
 
-def test_failed_create_stores_nothing_and_keeps_id_sequence(
+async def test_failed_create_stores_nothing(
     service: MonitorService,
 ) -> None:
-    add(service, "https://a.test")
+    first = await add(service, "https://a.test")
     with pytest.raises(DuplicateMonitorError):
-        add(service, "https://a.test")
+        await add(service, "https://a.test")
 
-    assert [m.id for m in service.list_all(ALICE)] == [1]
-    assert add(service, "https://b.test").id == 2
-
-
-def test_url_can_be_reused_after_delete(service: MonitorService) -> None:
-    first = add(service, "https://a.test")
-    service.delete(ALICE, first.id)
-
-    assert add(service, "https://a.test").id == 2
+    assert [m.id for m in await listed(service, ALICE)] == [first.id]
 
 
-def test_update_rejects_url_of_another_monitor_of_the_same_owner(
+async def test_url_can_be_reused_after_delete(service: MonitorService) -> None:
+    first = await add(service, "https://a.test")
+    await service.delete(ALICE, first.id)
+
+    assert (await add(service, "https://a.test")).id > first.id
+
+
+async def test_update_rejects_url_of_another_monitor_of_the_same_owner(
     service: MonitorService,
 ) -> None:
-    first = add(service, "https://a.test")
-    second = add(service, "https://b.test")
+    first = await add(service, "https://a.test")
+    second = await add(service, "https://b.test")
 
     with pytest.raises(DuplicateMonitorError) as exc_info:
-        service.update(ALICE, second.id, url="https://a.test")
+        await service.update(ALICE, second.id, url="https://a.test")
 
     assert exc_info.value.existing_id == first.id
-    assert service.get(ALICE, second.id).url == "https://b.test"
+    assert (await service.get(ALICE, second.id)).url == "https://b.test"
 
 
-def test_update_may_take_a_url_that_only_another_owner_has(
+async def test_update_may_take_a_url_that_only_another_owner_has(
     service: MonitorService,
 ) -> None:
-    add(service, "https://a.test", BOB)
-    mine = add(service, "https://b.test", ALICE)
+    await add(service, "https://a.test", BOB)
+    mine = await add(service, "https://b.test", ALICE)
 
-    assert service.update(ALICE, mine.id, url="https://a.test").url == "https://a.test"
+    assert (
+        await service.update(ALICE, mine.id, url="https://a.test")
+    ).url == "https://a.test"
 
 
-def test_update_may_keep_its_own_url(service: MonitorService) -> None:
-    created = add(service, "https://a.test")
+async def test_update_may_keep_its_own_url(service: MonitorService) -> None:
+    created = await add(service, "https://a.test")
 
-    updated = service.update(ALICE, created.id, url="https://a.test", timeout=3.0)
+    updated = await service.update(ALICE, created.id, url="https://a.test", timeout=3.0)
 
     assert (updated.url, updated.timeout) == ("https://a.test", 3.0)
 
 
-def test_admin_edit_checks_uniqueness_within_the_monitors_owner(
+async def test_admin_edit_checks_uniqueness_within_the_monitors_owner(
     service: MonitorService,
 ) -> None:
-    add(service, "https://a.test", ALICE)
-    second = add(service, "https://b.test", ALICE)
-    add(service, "https://c.test", ADMIN)
+    await add(service, "https://a.test", ALICE)
+    second = await add(service, "https://b.test", ALICE)
+    await add(service, "https://c.test", ADMIN)
 
     with pytest.raises(DuplicateMonitorError):
-        service.update(ADMIN, second.id, url="https://a.test")
+        await service.update(ADMIN, second.id, url="https://a.test")
     # У админа самого есть c.test, но монитор принадлежит Алисе: конфликта нет.
     assert (
-        service.update(ADMIN, second.id, url="https://c.test").url == "https://c.test"
-    )
+        await service.update(ADMIN, second.id, url="https://c.test")
+    ).url == "https://c.test"
 
 
-def test_update_to_a_free_url_frees_the_old_one(service: MonitorService) -> None:
-    created = add(service, "https://a.test")
-    service.update(ALICE, created.id, url="https://b.test")
+async def test_update_to_a_free_url_frees_the_old_one(service: MonitorService) -> None:
+    created = await add(service, "https://a.test")
+    await service.update(ALICE, created.id, url="https://b.test")
 
-    assert add(service, "https://a.test").id == 2
-
-
-def test_update_without_url_never_checks_duplicates(service: MonitorService) -> None:
-    created = add(service, "https://a.test")
-
-    assert service.update(ALICE, created.id, timeout=2.0).timeout == 2.0
+    assert (await add(service, "https://a.test")).id > created.id
 
 
-def test_update_unknown_id_is_not_found_not_conflict(service: MonitorService) -> None:
-    add(service, "https://a.test")
-
-    with pytest.raises(MonitorNotFoundError):
-        service.update(ALICE, 99, url="https://a.test")
-
-
-def test_update_foreign_monitor_is_not_found_not_conflict(
+async def test_update_without_url_never_checks_duplicates(
     service: MonitorService,
 ) -> None:
-    add(service, "https://a.test", BOB)
-    foreign = add(service, "https://b.test", ALICE)
+    created = await add(service, "https://a.test")
+
+    assert (await service.update(ALICE, created.id, timeout=2.0)).timeout == 2.0
+
+
+async def test_update_unknown_id_is_not_found_not_conflict(
+    service: MonitorService,
+) -> None:
+    await add(service, "https://a.test")
 
     with pytest.raises(MonitorNotFoundError):
-        service.update(BOB, foreign.id, url="https://a.test")
+        await service.update(ALICE, 99, url="https://a.test")
+
+
+async def test_update_foreign_monitor_is_not_found_not_conflict(
+    service: MonitorService,
+) -> None:
+    await add(service, "https://a.test", BOB)
+    foreign = await add(service, "https://b.test", ALICE)
+
+    with pytest.raises(MonitorNotFoundError):
+        await service.update(BOB, foreign.id, url="https://a.test")
 
 
 # --- каскад ----------------------------------------------------------------
 
 
-def add_check(checks: CheckRepository, monitor_id: int) -> None:
-    checks.add(
+async def add_check(checks: CheckRepository, monitor_id: int) -> None:
+    await checks.add(
         monitor_id=monitor_id,
         url="https://a.test",
         status_code=200,
         latency_ms=1.0,
         error=None,
         checked_at=datetime(2026, 1, 1, tzinfo=UTC),
-        ok=True,
     )
 
 
-def test_delete_removes_checks_of_that_monitor_only(
+async def test_delete_removes_checks_of_that_monitor_only(
     service: MonitorService, check_repository: CheckRepository
 ) -> None:
-    first, second = add(service, "https://a.test"), add(service, "https://b.test")
-    add_check(check_repository, first.id)
-    add_check(check_repository, second.id)
+    first, second = (
+        await add(service, "https://a.test"),
+        await add(service, "https://b.test"),
+    )
+    await add_check(check_repository, first.id)
+    await add_check(check_repository, second.id)
 
-    service.delete(ALICE, first.id)
+    await service.delete(ALICE, first.id)
 
-    assert check_repository.list_recent(first.id, 10) == []
-    assert len(check_repository.list_recent(second.id, 10)) == 1
+    assert await check_repository.list_recent(first.id, 10) == []
+    assert len(await check_repository.list_recent(second.id, 10)) == 1
 
 
-def test_failed_foreign_delete_keeps_checks(
+async def test_failed_foreign_delete_keeps_checks(
     service: MonitorService, check_repository: CheckRepository
 ) -> None:
-    foreign = add(service, actor=ALICE)
-    add_check(check_repository, foreign.id)
+    foreign = await add(service, actor=ALICE)
+    await add_check(check_repository, foreign.id)
 
     with pytest.raises(MonitorNotFoundError):
-        service.delete(BOB, foreign.id)
+        await service.delete(BOB, foreign.id)
 
-    assert len(check_repository.list_recent(foreign.id, 10)) == 1
-
-
-def test_delete_of_unknown_monitor_keeps_checks(
-    service: MonitorService, check_repository: CheckRepository
-) -> None:
-    add_check(check_repository, 5)
-
-    with pytest.raises(MonitorNotFoundError):
-        service.delete(ALICE, 5)
-
-    assert len(check_repository.list_recent(5, 10)) == 1
-
-
-def test_services_over_different_repositories_do_not_share_state() -> None:
-    first = MonitorService(MonitorRepository(), CheckRepository())
-    second = MonitorService(MonitorRepository(), CheckRepository())
-    add(first)
-
-    assert second.list_all(ALICE) == []
+    assert len(await check_repository.list_recent(foreign.id, 10)) == 1
 
 
 # --- согласованность интервала и таймаута -----------------------------------
 
 
-def test_create_rejects_timeout_not_shorter_than_interval(
+async def test_create_rejects_timeout_not_shorter_than_interval(
     service: MonitorService, repository: MonitorRepository
 ) -> None:
     with pytest.raises(InvalidMonitorError) as exc_info:
-        service.create(
+        await service.create(
             ALICE, url="https://a.test", interval=timedelta(seconds=30), timeout=30
         )
 
     assert exc_info.value.field == "timeout"
-    assert repository.list_all() == []
+    assert await listed_by_repository(repository) == []
 
 
-def test_update_rejects_timeout_that_does_not_fit_the_current_interval(
+async def test_update_rejects_timeout_that_does_not_fit_the_current_interval(
     service: MonitorService,
 ) -> None:
-    monitor = add(service)  # интервал 5 минут
+    monitor = await add(service)  # интервал 5 минут
 
     with pytest.raises(InvalidMonitorError) as exc_info:
-        service.update(ALICE, monitor.id, timeout=300)
+        await service.update(ALICE, monitor.id, timeout=300)
 
     assert exc_info.value.field == "timeout"
-    assert service.get(ALICE, monitor.id).timeout == 10.0
+    assert (await service.get(ALICE, monitor.id)).timeout == 10.0
 
 
-def test_update_rejects_interval_shorter_than_the_current_timeout(
+async def test_update_rejects_interval_shorter_than_the_current_timeout(
     service: MonitorService,
 ) -> None:
-    monitor = service.create(
+    monitor = await service.create(
         ALICE, url="https://a.test", interval=FIVE_MINUTES, timeout=100
     )
 
     with pytest.raises(InvalidMonitorError) as exc_info:
-        service.update(ALICE, monitor.id, interval=timedelta(seconds=60))
+        await service.update(ALICE, monitor.id, interval=timedelta(seconds=60))
 
     assert exc_info.value.field == "interval"
-    assert service.get(ALICE, monitor.id).interval == FIVE_MINUTES
+    assert (await service.get(ALICE, monitor.id)).interval == FIVE_MINUTES
 
 
-def test_update_accepts_a_consistent_pair_changed_together(
+async def test_update_accepts_a_consistent_pair_changed_together(
     service: MonitorService,
 ) -> None:
-    monitor = service.create(
+    monitor = await service.create(
         ALICE, url="https://a.test", interval=FIVE_MINUTES, timeout=100
     )
 
-    changed = service.update(
+    changed = await service.update(
         ALICE, monitor.id, interval=timedelta(seconds=60), timeout=50
     )
 
     assert (changed.interval, changed.timeout) == (timedelta(seconds=60), 50)
 
 
-def test_update_of_other_fields_ignores_the_pair_rule_when_it_holds(
+async def test_update_of_other_fields_ignores_the_pair_rule_when_it_holds(
     service: MonitorService,
 ) -> None:
-    monitor = add(service)
+    monitor = await add(service)
 
-    changed = service.update(ALICE, monitor.id, url="https://b.test")
+    changed = await service.update(ALICE, monitor.id, url="https://b.test")
 
     assert changed.url == "https://b.test"
 
 
-def test_missing_monitor_is_reported_before_invalid_values(
+async def test_missing_monitor_is_reported_before_invalid_values(
     service: MonitorService,
 ) -> None:
     with pytest.raises(MonitorNotFoundError):
-        service.update(ALICE, 999, timeout=10_000)
+        await service.update(ALICE, UNKNOWN_ID, timeout=10_000)
 
 
-def test_foreign_monitor_is_reported_as_missing_not_as_invalid(
+async def test_foreign_monitor_is_reported_as_missing_not_as_invalid(
     service: MonitorService,
 ) -> None:
-    monitor = add(service, actor=BOB)
+    monitor = await add(service, actor=BOB)
 
     with pytest.raises(MonitorNotFoundError):
-        service.update(ALICE, monitor.id, timeout=10_000)
+        await service.update(ALICE, monitor.id, timeout=10_000)

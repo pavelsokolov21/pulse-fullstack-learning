@@ -182,10 +182,9 @@ def test_each_client_address_has_its_own_budget(
         login(limited_client)
     assert login(limited_client).status_code == 429
 
-    # Второй `with` перезапускает приложение: пользователей уже нет, поэтому 401
-    # (запрос обработан), а не 429 (запрос отвергнут лимитом).
+    # С другого адреса тот же вход обработан (200), а не отвергнут лимитом (429).
     with TestClient(auth_app, client=("203.0.113.7", 50000)) as other:
-        assert login(other).status_code == 401
+        assert login(other).status_code == 200
 
 
 def test_x_forwarded_for_header_cannot_dodge_the_limit(

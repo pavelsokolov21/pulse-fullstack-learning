@@ -7,7 +7,10 @@ from pulse.domain.errors import (
     RefreshTokenError,
     RefreshTokenExpiredError,
 )
+from pulse.domain.users import Role, User
+from pulse.repositories.database import Session
 from pulse.repositories.refresh_tokens import RefreshTokenRepository
+from pulse.repositories.users import UserRepository
 from pulse.services.refresh_tokens import RefreshTokenService, hash_token
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -28,8 +31,16 @@ def clock() -> Clock:
 
 
 @pytest.fixture
-def repo() -> RefreshTokenRepository:
-    return RefreshTokenRepository()
+def repo(session: Session) -> RefreshTokenRepository:
+    return RefreshTokenRepository(session)
+
+
+@pytest.fixture
+async def user(session: Session) -> User:
+    """Владелец токенов: внешний ключ требует настоящую строку в users."""
+    return await UserRepository(session).create(
+        email="user@example.com", password_hash="h", role=Role.MANAGER
+    )
 
 
 @pytest.fixture
@@ -40,51 +51,54 @@ def service(repo: RefreshTokenRepository, clock: Clock) -> RefreshTokenService:
 # --- issue -----------------------------------------------------------------
 
 
-def test_issue_returns_a_random_token_and_lifetime(
+async def test_issue_returns_a_random_token_and_lifetime(
+    user: User,
     service: RefreshTokenService,
 ) -> None:
-    issued = service.issue(1)
+    issued = await service.issue(user.id)
 
     assert issued.expires_in == 7 * 24 * 3600
     assert len(issued.token) >= 43  # 32 байта в base64url
 
 
-def test_issued_tokens_are_unique(service: RefreshTokenService) -> None:
-    tokens = {service.issue(1).token for _ in range(50)}
+async def test_issued_tokens_are_unique(
+    user: User, service: RefreshTokenService
+) -> None:
+    tokens = {(await service.issue(user.id)).token for _ in range(50)}
 
     assert len(tokens) == 50
 
 
-def test_only_the_hash_is_stored(
-    service: RefreshTokenService, repo: RefreshTokenRepository
+async def test_only_the_hash_is_stored(
+    user: User, service: RefreshTokenService, repo: RefreshTokenRepository
 ) -> None:
-    issued = service.issue(1)
+    issued = await service.issue(user.id)
 
-    record = repo.find_by_hash(hash_token(issued.token))
+    record = await repo.find_by_hash(hash_token(issued.token))
     assert record is not None
     assert record.token_hash != issued.token
     assert issued.token not in record.token_hash
-    assert repo.find_by_hash(issued.token) is None
+    assert await repo.find_by_hash(issued.token) is None
 
 
-def test_issue_starts_a_new_family_each_time(
-    service: RefreshTokenService, repo: RefreshTokenRepository
+async def test_issue_starts_a_new_family_each_time(
+    user: User, service: RefreshTokenService, repo: RefreshTokenRepository
 ) -> None:
-    first, second = service.issue(1), service.issue(1)
+    first, second = await service.issue(user.id), await service.issue(user.id)
 
-    a = repo.find_by_hash(hash_token(first.token))
-    b = repo.find_by_hash(hash_token(second.token))
+    a = await repo.find_by_hash(hash_token(first.token))
+    b = await repo.find_by_hash(hash_token(second.token))
     assert a is not None
     assert b is not None
     assert a.family_id != b.family_id
 
 
-def test_expiry_is_ttl_after_issue(
-    service: RefreshTokenService, repo: RefreshTokenRepository
+async def test_expiry_is_ttl_after_issue(
+    user: User, service: RefreshTokenService, repo: RefreshTokenRepository
 ) -> None:
-    issued = service.issue(1)
+    issued = await service.issue(user.id)
 
-    record = repo.find_by_hash(hash_token(issued.token))
+    record = await repo.find_by_hash(hash_token(issued.token))
     assert record is not None
     assert record.expires_at == NOW + TTL
 
@@ -92,25 +106,26 @@ def test_expiry_is_ttl_after_issue(
 # --- rotate ----------------------------------------------------------------
 
 
-def test_rotate_returns_user_and_a_different_token(
+async def test_rotate_returns_user_and_a_different_token(
+    user: User,
     service: RefreshTokenService,
 ) -> None:
-    old = service.issue(5)
+    old = await service.issue(user.id)
 
-    user_id, new = service.rotate(old.token)
+    user_id, new = await service.rotate(old.token)
 
-    assert user_id == 5
+    assert user_id == user.id
     assert new.token != old.token
 
 
-def test_rotate_keeps_the_family_and_revokes_the_old_token(
-    service: RefreshTokenService, repo: RefreshTokenRepository
+async def test_rotate_keeps_the_family_and_revokes_the_old_token(
+    user: User, service: RefreshTokenService, repo: RefreshTokenRepository
 ) -> None:
-    old = service.issue(1)
-    _, new = service.rotate(old.token)
+    old = await service.issue(user.id)
+    _, new = await service.rotate(old.token)
 
-    old_record = repo.find_by_hash(hash_token(old.token))
-    new_record = repo.find_by_hash(hash_token(new.token))
+    old_record = await repo.find_by_hash(hash_token(old.token))
+    new_record = await repo.find_by_hash(hash_token(new.token))
     assert old_record is not None
     assert new_record is not None
     assert old_record.revoked_at == NOW
@@ -118,92 +133,99 @@ def test_rotate_keeps_the_family_and_revokes_the_old_token(
     assert old_record.family_id == new_record.family_id
 
 
-def test_new_token_gets_a_fresh_lifetime(
-    service: RefreshTokenService, repo: RefreshTokenRepository, clock: Clock
+async def test_new_token_gets_a_fresh_lifetime(
+    user: User, service: RefreshTokenService, repo: RefreshTokenRepository, clock: Clock
 ) -> None:
-    old = service.issue(1)
+    old = await service.issue(user.id)
     clock.now += timedelta(days=3)
 
-    _, new = service.rotate(old.token)
+    _, new = await service.rotate(old.token)
 
-    record = repo.find_by_hash(hash_token(new.token))
+    record = await repo.find_by_hash(hash_token(new.token))
     assert record is not None
     assert record.expires_at == clock.now + TTL
 
 
-def test_rotation_chain_keeps_working(service: RefreshTokenService) -> None:
-    token = service.issue(1).token
+async def test_rotation_chain_keeps_working(
+    user: User, service: RefreshTokenService
+) -> None:
+    token = (await service.issue(user.id)).token
 
     for _ in range(5):
-        _, new = service.rotate(token)
+        _, new = await service.rotate(token)
         token = new.token
 
-    assert service.rotate(token)[0] == 1
+    assert (await service.rotate(token))[0] == user.id
 
 
-def test_unknown_token_is_rejected(service: RefreshTokenService) -> None:
+async def test_unknown_token_is_rejected(service: RefreshTokenService) -> None:
     with pytest.raises(InvalidRefreshTokenError):
-        service.rotate("never-issued")
+        await service.rotate("never-issued")
 
 
 @pytest.mark.parametrize("garbage", ["", " ", "a" * 10_000, "ы"])
-def test_garbage_is_rejected(service: RefreshTokenService, garbage: str) -> None:
+async def test_garbage_is_rejected(service: RefreshTokenService, garbage: str) -> None:
     with pytest.raises(InvalidRefreshTokenError):
-        service.rotate(garbage)
+        await service.rotate(garbage)
 
 
 # --- повторное использование ------------------------------------------------
 
 
-def test_reusing_an_old_token_is_rejected(service: RefreshTokenService) -> None:
-    old = service.issue(1)
-    service.rotate(old.token)
-
-    with pytest.raises(InvalidRefreshTokenError):
-        service.rotate(old.token)
-
-
-def test_reuse_revokes_the_whole_chain(
-    service: RefreshTokenService, repo: RefreshTokenRepository
+async def test_reusing_an_old_token_is_rejected(
+    user: User, service: RefreshTokenService
 ) -> None:
-    first = service.issue(1)
-    _, second = service.rotate(first.token)
-    _, third = service.rotate(second.token)
+    old = await service.issue(user.id)
+    await service.rotate(old.token)
 
     with pytest.raises(InvalidRefreshTokenError):
-        service.rotate(first.token)  # вор предъявил самый первый токен
+        await service.rotate(old.token)
+
+
+async def test_reuse_revokes_the_whole_chain(
+    user: User, service: RefreshTokenService, repo: RefreshTokenRepository
+) -> None:
+    first = await service.issue(user.id)
+    _, second = await service.rotate(first.token)
+    _, third = await service.rotate(second.token)
+
+    with pytest.raises(InvalidRefreshTokenError):
+        await service.rotate(first.token)  # вор предъявил самый первый токен
 
     # Законный владелец с актуальным токеном тоже вынужден войти заново.
     with pytest.raises(InvalidRefreshTokenError):
-        service.rotate(third.token)
-    family = repo.list_family(
-        repo.find_by_hash(hash_token(first.token)).family_id  # pyright: ignore[reportOptionalMemberAccess]
+        await service.rotate(third.token)
+    family = await repo.list_family(
+        (await repo.find_by_hash(hash_token(first.token))).family_id  # pyright: ignore[reportOptionalMemberAccess]
     )
     assert len(family) == 3
     assert all(t.revoked_at is not None for t in family)
 
 
-def test_reuse_does_not_touch_other_sessions(service: RefreshTokenService) -> None:
-    stolen = service.issue(1)
-    other_device = service.issue(1)
-    service.rotate(stolen.token)
+async def test_reuse_does_not_touch_other_sessions(
+    user: User, service: RefreshTokenService
+) -> None:
+    stolen = await service.issue(user.id)
+    other_device = await service.issue(user.id)
+    await service.rotate(stolen.token)
 
     with pytest.raises(InvalidRefreshTokenError):
-        service.rotate(stolen.token)
+        await service.rotate(stolen.token)
 
-    assert service.rotate(other_device.token)[0] == 1
+    assert (await service.rotate(other_device.token))[0] == user.id
 
 
-def test_reuse_is_reported_as_a_generic_invalid_token(
+async def test_reuse_is_reported_as_a_generic_invalid_token(
+    user: User,
     service: RefreshTokenService,
 ) -> None:
-    old = service.issue(1)
-    service.rotate(old.token)
+    old = await service.issue(user.id)
+    await service.rotate(old.token)
 
     with pytest.raises(InvalidRefreshTokenError) as reused:
-        service.rotate(old.token)
+        await service.rotate(old.token)
     with pytest.raises(InvalidRefreshTokenError) as unknown:
-        service.rotate("never-issued")
+        await service.rotate("never-issued")
 
     assert reused.value.code == unknown.value.code
     assert str(reused.value) == str(unknown.value)
@@ -212,24 +234,24 @@ def test_reuse_is_reported_as_a_generic_invalid_token(
 # --- срок ------------------------------------------------------------------
 
 
-def test_token_is_valid_until_the_last_second(
-    service: RefreshTokenService, clock: Clock
+async def test_token_is_valid_until_the_last_second(
+    user: User, service: RefreshTokenService, clock: Clock
 ) -> None:
-    token = service.issue(1).token
+    token = (await service.issue(user.id)).token
     clock.now = NOW + TTL - timedelta(seconds=1)
 
-    assert service.rotate(token)[0] == 1
+    assert (await service.rotate(token))[0] == user.id
 
 
 @pytest.mark.parametrize("extra", [0, 1, 86400])
-def test_expired_token_is_rejected(
-    service: RefreshTokenService, clock: Clock, extra: int
+async def test_expired_token_is_rejected(
+    user: User, service: RefreshTokenService, clock: Clock, extra: int
 ) -> None:
-    token = service.issue(1).token
+    token = (await service.issue(user.id)).token
     clock.now = NOW + TTL + timedelta(seconds=extra)
 
     with pytest.raises(RefreshTokenExpiredError):
-        service.rotate(token)
+        await service.rotate(token)
 
 
 def test_expired_error_is_a_refresh_token_error() -> None:
@@ -237,17 +259,17 @@ def test_expired_error_is_a_refresh_token_error() -> None:
     assert issubclass(InvalidRefreshTokenError, RefreshTokenError)
 
 
-def test_rotation_of_expired_token_does_not_issue_a_new_one(
-    service: RefreshTokenService, repo: RefreshTokenRepository, clock: Clock
+async def test_rotation_of_expired_token_does_not_issue_a_new_one(
+    user: User, service: RefreshTokenService, repo: RefreshTokenRepository, clock: Clock
 ) -> None:
-    token = service.issue(1).token
+    token = (await service.issue(user.id)).token
     clock.now += TTL
 
     with pytest.raises(RefreshTokenExpiredError):
-        service.rotate(token)
+        await service.rotate(token)
 
-    family = repo.list_family(
-        repo.find_by_hash(hash_token(token)).family_id  # pyright: ignore[reportOptionalMemberAccess]
+    family = await repo.list_family(
+        (await repo.find_by_hash(hash_token(token))).family_id  # pyright: ignore[reportOptionalMemberAccess]
     )
     assert len(family) == 1
 
@@ -255,44 +277,51 @@ def test_rotation_of_expired_token_does_not_issue_a_new_one(
 # --- revoke ----------------------------------------------------------------
 
 
-def test_revoke_ends_the_session(service: RefreshTokenService) -> None:
-    token = service.issue(1).token
+async def test_revoke_ends_the_session(
+    user: User, service: RefreshTokenService
+) -> None:
+    token = (await service.issue(user.id)).token
 
-    service.revoke(token)
+    await service.revoke(token)
 
     with pytest.raises(InvalidRefreshTokenError):
-        service.rotate(token)
+        await service.rotate(token)
 
 
-def test_revoke_kills_the_current_token_of_the_chain(
+async def test_revoke_kills_the_current_token_of_the_chain(
+    user: User,
     service: RefreshTokenService,
 ) -> None:
-    first = service.issue(1)
-    _, current = service.rotate(first.token)
+    first = await service.issue(user.id)
+    _, current = await service.rotate(first.token)
 
-    service.revoke(first.token)  # logout со старым токеном всё равно закрывает сессию
+    await service.revoke(
+        first.token
+    )  # logout со старым токеном всё равно закрывает сессию
 
     with pytest.raises(InvalidRefreshTokenError):
-        service.rotate(current.token)
+        await service.rotate(current.token)
 
 
-def test_revoke_leaves_other_sessions_alone(service: RefreshTokenService) -> None:
-    mine, other = service.issue(1), service.issue(1)
+async def test_revoke_leaves_other_sessions_alone(
+    user: User, service: RefreshTokenService
+) -> None:
+    mine, other = await service.issue(user.id), await service.issue(user.id)
 
-    service.revoke(mine.token)
+    await service.revoke(mine.token)
 
-    assert service.rotate(other.token)[0] == 1
-
-
-def test_revoke_unknown_token_is_a_noop(service: RefreshTokenService) -> None:
-    service.revoke("never-issued")
+    assert (await service.rotate(other.token))[0] == user.id
 
 
-def test_revoke_twice_is_fine(service: RefreshTokenService) -> None:
-    token = service.issue(1).token
+async def test_revoke_unknown_token_is_a_noop(service: RefreshTokenService) -> None:
+    await service.revoke("never-issued")
 
-    service.revoke(token)
-    service.revoke(token)
+
+async def test_revoke_twice_is_fine(user: User, service: RefreshTokenService) -> None:
+    token = (await service.issue(user.id)).token
+
+    await service.revoke(token)
+    await service.revoke(token)
 
 
 def test_hash_token_is_stable_and_not_reversible_looking() -> None:

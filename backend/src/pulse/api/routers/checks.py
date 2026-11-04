@@ -49,5 +49,5 @@ async def list_checks(
     user: CurrentUserDep,
     limit: Limit = DEFAULT_LIMIT,
 ) -> list[CheckRead]:
-    checks = service.list_recent(user, monitor_id, limit)
+    checks = await service.list_recent(user, monitor_id, limit)
     return [CheckRead.model_validate(c) for c in checks]

@@ -1,30 +1,46 @@
-from collections import deque
 from datetime import datetime
-from itertools import count
+
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from pulse.domain.checks import Check
+from pulse.domain.errors import MonitorNotFoundError
+from pulse.repositories.database import Session, constraint_name
+from pulse.repositories.models import CheckModel
 
 DEFAULT_MAX_CHECKS_PER_MONITOR = 100
 
 
-class CheckRepository:
-    """Последние проверки мониторов в памяти.
+def _to_domain(model: CheckModel) -> Check:
+    return Check(
+        id=model.id,
+        monitor_id=model.monitor_id,
+        url=model.url,
+        status_code=model.status_code,
+        latency_ms=model.latency_ms,
+        error=model.error,
+        checked_at=model.checked_at,
+        ok=model.ok,
+    )
 
-    На монитор хранится не больше `max_per_monitor` проверок: старые
-    вытесняются. Как и `MonitorRepository`, не потокобезопасен и рассчитан на
-    вызовы из одного потока event loop.
+
+class CheckRepository:
+    """Последние проверки мониторов в PostgreSQL.
+
+    На монитор хранится не больше `max_per_monitor` проверок: после каждой записи
+    старые удаляются. Это решение учебного проекта; на больших объёмах чистку
+    выносят в периодическую задачу или секционирование (фаза 2, неделя 4).
     """
 
-    def __init__(self, max_per_monitor: int = DEFAULT_MAX_CHECKS_PER_MONITOR) -> None:
-        # deque(maxlen=0) молча выбрасывает всё, а отрицательный maxlen даёт
-        # ValueError только внутри deque: проверяем явно и сразу.
+    def __init__(
+        self, session: Session, max_per_monitor: int = DEFAULT_MAX_CHECKS_PER_MONITOR
+    ) -> None:
         if max_per_monitor < 1:
             raise ValueError("max_per_monitor должен быть не меньше 1")
+        self._session = session
         self._max_per_monitor = max_per_monitor
-        self._checks: dict[int, deque[Check]] = {}
-        self._ids = count(1)
 
-    def add(
+    async def add(
         self,
         *,
         monitor_id: int,
@@ -33,28 +49,59 @@ class CheckRepository:
         latency_ms: float,
         error: str | None,
         checked_at: datetime,
-        ok: bool,
     ) -> Check:
-        check = Check(
-            id=next(self._ids),
+        """Сохраняет проверку. Поле `ok` вычисляет сама база по `status_code`.
+
+        Если монитор удалили (в том числе параллельным запросом), внешний ключ не
+        даст записать проверку: `MonitorNotFoundError`.
+        """
+        model = CheckModel(
             monitor_id=monitor_id,
             url=url,
             status_code=status_code,
             latency_ms=latency_ms,
             error=error,
             checked_at=checked_at,
-            ok=ok,
         )
-        window = self._checks.setdefault(
-            monitor_id, deque[Check](maxlen=self._max_per_monitor)
-        )
-        window.append(check)
+        try:
+            async with self._session.begin_nested():
+                self._session.add(model)
+        except IntegrityError as exc:
+            if constraint_name(exc) == "checks_monitor_id_fkey":
+                raise MonitorNotFoundError(monitor_id) from exc
+            raise
+        check = _to_domain(model)
+        await self._trim(monitor_id)
         return check
 
-    def list_recent(self, monitor_id: int, limit: int) -> list[Check]:
+    async def list_recent(self, monitor_id: int, limit: int) -> list[Check]:
         """До `limit` последних проверок монитора, новые первыми."""
-        window = self._checks.get(monitor_id, ())
-        return list(reversed(window))[:limit]
+        result = await self._session.scalars(
+            select(CheckModel)
+            .where(CheckModel.monitor_id == monitor_id)
+            .order_by(CheckModel.checked_at.desc(), CheckModel.id.desc())
+            .limit(limit)
+        )
+        return [_to_domain(c) for c in result]
 
-    def delete_for_monitor(self, monitor_id: int) -> None:
-        self._checks.pop(monitor_id, None)
+    async def release_connection(self) -> None:
+        """Завершает текущую транзакцию, возвращая соединение в пул.
+
+        Нужно перед долгим ожиданием не-базы (HTTP-запрос проверки): иначе сессия
+        держит соединение в состоянии «idle in transaction» все 10+ секунд, а пул
+        из 15 соединений кончается на 16-й одновременной проверке.
+        """
+        await self._session.commit()
+
+    async def _trim(self, monitor_id: int) -> None:
+        newest = (
+            select(CheckModel.id)
+            .where(CheckModel.monitor_id == monitor_id)
+            .order_by(CheckModel.checked_at.desc(), CheckModel.id.desc())
+            .limit(self._max_per_monitor)
+        )
+        await self._session.execute(
+            delete(CheckModel).where(
+                CheckModel.monitor_id == monitor_id, CheckModel.id.not_in(newest)
+            )
+        )

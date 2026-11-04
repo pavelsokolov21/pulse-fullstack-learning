@@ -102,7 +102,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Monitors */
+        /**
+         * List Monitors
+         * @description Страница мониторов с email владельца: админу все, остальным свои.
+         */
         get: operations["list_monitors"];
         put?: never;
         /** Create Monitor */
@@ -236,6 +239,38 @@ export interface components {
              * @default 10
              */
             timeout?: number;
+        };
+        /**
+         * MonitorListItem
+         * @description Строка таблицы мониторов: монитор и email владельца.
+         */
+        MonitorListItem: {
+            /** Id */
+            id: number;
+            /** Owner Id */
+            owner_id: number;
+            /** Url */
+            url: string;
+            /** Interval */
+            interval: number;
+            /** Timeout */
+            timeout: number;
+            /** Owner Email */
+            owner_email: string;
+        };
+        /**
+         * MonitorPage
+         * @description Страница списка. `total` нужен интерфейсу, чтобы показать число страниц.
+         */
+        MonitorPage: {
+            /** Items */
+            items: components["schemas"]["MonitorListItem"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /**
          * MonitorRead
@@ -538,7 +573,10 @@ export interface operations {
     };
     list_monitors: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -551,7 +589,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MonitorRead"][];
+                    "application/json": components["schemas"]["MonitorPage"];
                 };
             };
             /** @description Unauthorized */

@@ -66,3 +66,20 @@ class MonitorRead(BaseModel):
     url: str
     interval: IntervalSeconds
     timeout: float
+
+
+class MonitorListItem(MonitorRead):
+    """Строка таблицы мониторов: монитор и email владельца."""
+
+    owner_email: str
+
+
+class MonitorPage(BaseModel):
+    """Страница списка. `total` нужен интерфейсу, чтобы показать число страниц."""
+
+    model_config = ConfigDict(frozen=True)
+
+    items: list[MonitorListItem]
+    total: int
+    limit: int
+    offset: int

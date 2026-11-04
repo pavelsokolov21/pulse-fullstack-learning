@@ -1,27 +1,46 @@
-from itertools import count
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
+from pulse.domain.errors import DuplicateUserError
 from pulse.domain.users import Role, User
+from pulse.repositories.database import Session, constraint_name
+from pulse.repositories.models import UserModel
+
+
+def _to_domain(model: UserModel) -> User:
+    return User(model.id, model.email, model.password_hash, Role(model.role))
 
 
 class UserRepository:
-    """Пользователи в памяти (до PostgreSQL в фазе 2).
+    """Пользователи в PostgreSQL.
 
-    Email приходит уже нормализованным; уникальность проверяет сервис, а в базе
-    её закрепит UNIQUE-ограничение. Не потокобезопасен: вызывается из одного
-    потока event loop.
+    Email приходит уже нормализованным. Уникальность закрепляет UNIQUE
+    `users_email_key`, поэтому «проверить, потом создать» не нужно: гонку двух
+    одинаковых регистраций решает база.
     """
 
-    def __init__(self) -> None:
-        self._users: dict[int, User] = {}
-        self._ids = count(1)
+    def __init__(self, session: Session) -> None:
+        self._session = session
 
-    def get(self, user_id: int) -> User | None:
-        return self._users.get(user_id)
+    async def get(self, user_id: int) -> User | None:
+        model = await self._session.get(UserModel, user_id)
+        return None if model is None else _to_domain(model)
 
-    def find_by_email(self, email: str) -> User | None:
-        return next((u for u in self._users.values() if u.email == email), None)
+    async def find_by_email(self, email: str) -> User | None:
+        model = await self._session.scalar(
+            select(UserModel).where(UserModel.email == email)
+        )
+        return None if model is None else _to_domain(model)
 
-    def create(self, *, email: str, password_hash: str, role: Role) -> User:
-        user = User(next(self._ids), email, password_hash, role)
-        self._users[user.id] = user
-        return user
+    async def create(self, *, email: str, password_hash: str, role: Role) -> User:
+        model = UserModel(email=email, password_hash=password_hash, role=role.value)
+        try:
+            # SAVEPOINT: при нарушении откатывается только эта вставка, а сессия
+            # остаётся рабочей (без него вся транзакция стала бы непригодной).
+            async with self._session.begin_nested():
+                self._session.add(model)
+        except IntegrityError as exc:
+            if constraint_name(exc) == "users_email_key":
+                raise DuplicateUserError from exc
+            raise
+        return _to_domain(model)

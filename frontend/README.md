@@ -9,6 +9,7 @@ Next.js (App Router) поверх API из `../backend`. Типы и клиен�
 ```bash
 # backend/
 PULSE_API_JWT_SECRET=$(openssl rand -hex 32) PULSE_API_REFRESH_COOKIE_PATH=/api/auth \
+  PULSE_API_DATABASE_URL='postgresql+psycopg://pulse_app:ПАРОЛЬ@127.0.0.1:5432/pulse_schema' \
   uv run fastapi dev --no-proxy-headers
 
 # frontend/
@@ -17,6 +18,8 @@ npm run dev          # http://localhost:3000
 ```
 
 Браузер обращается только к Next.js: `rewrites` в `next.config.ts` переправляет `/api/*` на FastAPI (по умолчанию `http://localhost:8000`, меняется переменной `API_URL`, см. `.env.example`). Origin один, поэтому CORS не нужен, а refresh-cookie с `SameSite=Strict` не мешает. `API_URL` читается при сборке и старте сервера Next.js.
+
+Страница `/monitors`: таблица мониторов (URL, email владельца, интервал, таймаут) с постраничной навигацией по 10 записей и данные текущего пользователя (email и роль) в шапке. Админ видит все мониторы, остальные только свои. Номер страницы хранится в состоянии компонента, а не в адресе: после перезагрузки откроется первая.
 
 Пользователя пока можно создать только через API (`/docs` бэкенда или `curl -X POST localhost:8000/auth/register -H 'Content-Type: application/json' -d '{"email":"a@b.co","password":"correct horse battery"}'`).
 

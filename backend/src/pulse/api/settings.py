@@ -5,6 +5,7 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from pulse.repositories.checks import DEFAULT_MAX_CHECKS_PER_MONITOR
+from pulse.repositories.database import ASYNC_URL_PREFIX
 
 # Хост и порт сюда не входят: их принимает запускающий процесс
 # (`fastapi dev --host --port`, `uvicorn --host --port`), приложение их не читает.
@@ -34,6 +35,12 @@ class ApiSettings(BaseSettings):
         description="Сколько последних проверок хранить на монитор",
     )
 
+    database_url: SecretStr = Field(
+        description=(
+            "Адрес PostgreSQL для приложения (роль pulse_app), в формате "
+            "postgresql+psycopg://пользователь:пароль@хост:порт/база. Содержит пароль"
+        ),
+    )
     jwt_secret: SecretStr = Field(
         min_length=32,
         description="Ключ подписи JWT (HS256), не короче 32 символов",
@@ -58,6 +65,16 @@ class ApiSettings(BaseSettings):
             "под /api, нужен /api/auth: браузер шлёт cookie только на этот путь"
         ),
     )
+
+    @field_validator("database_url")
+    @classmethod
+    def _async_postgres_url(cls, value: SecretStr) -> SecretStr:
+        # Без драйвера в адресе SQLAlchemy выберет синхронный psycopg2, и ошибка
+        # про «async» всплыла бы только на первом запросе. Само значение (пароль)
+        # в текст ошибки не попадает.
+        if not value.get_secret_value().startswith(ASYNC_URL_PREFIX):
+            raise ValueError(f"адрес должен начинаться с {ASYNC_URL_PREFIX}")
+        return value
 
     @field_validator("log_level", mode="before")
     @classmethod

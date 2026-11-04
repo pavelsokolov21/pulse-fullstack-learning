@@ -39,3 +39,10 @@ class Monitor:
     url: str
     interval: timedelta
     timeout: float
+
+
+@dataclass(frozen=True)
+class MonitorWithOwner(Monitor):
+    """Монитор для списка: вместе с email владельца (в таблице нужен он, а не id)."""
+
+    owner_email: str

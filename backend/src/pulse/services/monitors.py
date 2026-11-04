@@ -1,13 +1,16 @@
 from datetime import timedelta
 
 from pulse.domain.errors import (
-    DuplicateMonitorError,
     InvalidMonitorError,
     MonitorNotFoundError,
 )
-from pulse.domain.monitors import Monitor, ensure_timeout_fits_interval
+from pulse.domain.monitors import (
+    Monitor,
+    MonitorWithOwner,
+    ensure_timeout_fits_interval,
+)
+from pulse.domain.pagination import Page
 from pulse.domain.users import Role, User
-from pulse.repositories.checks import CheckRepository
 from pulse.repositories.monitors import MonitorRepository
 
 
@@ -20,37 +23,41 @@ class MonitorService:
     только со своими. Чужой монитор неотличим от несуществующего (404, а не 403):
     иначе по ответу можно перебирать чужие id (IDOR).
 
-    Проверка «найти, потом создать» не атомарна. Пока всё выполняется в одном
-    потоке event loop без `await` между шагами, гонки нет; с базой данных
-    её закроет UNIQUE (owner_id, url), а эта проверка останется для понятной ошибки.
+    Уникальность URL в рамках владельца отдельно не проверяется: «найти, потом
+    создать» не атомарно, и два параллельных запроса оба прошли бы проверку. Дубликат
+    ловит UNIQUE (owner_id, url) в базе, а репозиторий поднимает
+    `DuplicateMonitorError`.
+    Каскадное удаление проверок монитора тоже на стороне базы (ON DELETE CASCADE).
     """
 
-    def __init__(self, repository: MonitorRepository, checks: CheckRepository) -> None:
+    def __init__(self, repository: MonitorRepository) -> None:
         self._repository = repository
-        self._checks = checks
 
-    def list_all(self, actor: User) -> list[Monitor]:
-        if actor.role is Role.ADMIN:
-            return self._repository.list_all()
-        return self._repository.list_for_owner(actor.id)
+    async def list_page(
+        self, actor: User, *, limit: int, offset: int
+    ) -> Page[MonitorWithOwner]:
+        """Страница списка: админ видит все мониторы, остальные свои."""
+        owner_id = None if actor.role is Role.ADMIN else actor.id
+        return await self._repository.list_page(
+            owner_id=owner_id, limit=limit, offset=offset
+        )
 
-    def get(self, actor: User, monitor_id: int) -> Monitor:
-        monitor = self._repository.get(monitor_id)
+    async def get(self, actor: User, monitor_id: int) -> Monitor:
+        monitor = await self._repository.get(monitor_id)
         if actor.role is not Role.ADMIN and monitor.owner_id != actor.id:
             raise MonitorNotFoundError(monitor_id)
         return monitor
 
-    def create(
+    async def create(
         self, actor: User, *, url: str, interval: timedelta, timeout: float
     ) -> Monitor:
         # Владелец всегда тот, кто создаёт: его нельзя передать из запроса.
         self._ensure_timeout_fits(interval, timeout)
-        self._ensure_url_is_free(actor.id, url)
-        return self._repository.create(
+        return await self._repository.create(
             owner_id=actor.id, url=url, interval=interval, timeout=timeout
         )
 
-    def update(
+    async def update(
         self,
         actor: User,
         monitor_id: int,
@@ -60,7 +67,7 @@ class MonitorService:
         timeout: float | None = None,
     ) -> Monitor:
         """Меняет только переданные поля; `None` означает «не менять»."""
-        monitor = self.get(actor, monitor_id)  # 404 раньше, чем 409
+        monitor = await self.get(actor, monitor_id)  # 404 раньше, чем 409
         # Правило про сочетание полей: PATCH мог поменять только одно из них.
         self._ensure_timeout_fits(
             interval if interval is not None else monitor.interval,
@@ -68,19 +75,15 @@ class MonitorService:
             # Виновато то поле, которое пришло в запросе; если оба, то таймаут.
             field="interval" if timeout is None and interval is not None else "timeout",
         )
-        if url is not None:
-            # Уникальность в рамках владельца монитора, а не того, кто правит.
-            self._ensure_url_is_free(monitor.owner_id, url, allow_id=monitor_id)
-        return self._repository.update(
+        # Уникальность URL в рамках владельца монитора, а не того, кто правит:
+        # репозиторий проверяет её по самому монитору.
+        return await self._repository.update(
             monitor_id, url=url, interval=interval, timeout=timeout
         )
 
-    def delete(self, actor: User, monitor_id: int) -> None:
-        self.get(actor, monitor_id)
-        self._repository.delete(monitor_id)
-        # Каскад: проверки удалённого монитора никому не нужны. В базе (фаза 2)
-        # это сделает внешний ключ с ON DELETE CASCADE.
-        self._checks.delete_for_monitor(monitor_id)
+    async def delete(self, actor: User, monitor_id: int) -> None:
+        await self.get(actor, monitor_id)
+        await self._repository.delete(monitor_id)
 
     @staticmethod
     def _ensure_timeout_fits(
@@ -90,11 +93,3 @@ class MonitorService:
             ensure_timeout_fits_interval(interval, timeout)
         except ValueError as exc:
             raise InvalidMonitorError(field, str(exc)) from exc
-
-    def _ensure_url_is_free(
-        self, owner_id: int, url: str, *, allow_id: int | None = None
-    ) -> None:
-        # allow_id: монитор может «сменить» URL на свой же, это не дубликат.
-        existing = self._repository.find_by_url(owner_id, url)
-        if existing is not None and existing.id != allow_id:
-            raise DuplicateMonitorError(url, existing.id)

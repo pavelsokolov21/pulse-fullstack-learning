@@ -2,7 +2,8 @@ import hashlib
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import NoReturn
 
 from pulse.core.clock import Clock, utc_now
 from pulse.domain.errors import InvalidRefreshTokenError, RefreshTokenExpiredError
@@ -41,38 +42,48 @@ class RefreshTokenService:
         self._ttl = ttl
         self._clock = clock
 
-    def issue(self, user_id: int) -> IssuedRefreshToken:
+    async def issue(self, user_id: int) -> IssuedRefreshToken:
         """Новая сессия: токен в новой цепочке."""
-        return self._create(user_id, family_id=uuid.uuid4().hex)
+        return await self._create(user_id, family_id=uuid.uuid4().hex)
 
-    def rotate(self, token: str) -> tuple[int, IssuedRefreshToken]:
+    async def rotate(self, token: str) -> tuple[int, IssuedRefreshToken]:
         """Меняет токен на новый; возвращает id пользователя и новый токен."""
-        record = self._repository.find_by_hash(hash_token(token))
+        record = await self._repository.find_by_hash(hash_token(token))
         if record is None:
             raise InvalidRefreshTokenError
 
         now = self._clock()
         if record.revoked_at is not None:
             # Повторное использование: отзываем всю цепочку.
-            self._repository.revoke_family(record.family_id, now)
-            raise InvalidRefreshTokenError
+            await self._reject_reuse(record.family_id, now)
         if now >= record.expires_at:
             raise RefreshTokenExpiredError
 
-        # Между проверкой и отзывом нет await: параллельный запрос с тем же токеном
-        # не успеет проскочить. В базе это UPDATE ... WHERE revoked_at IS NULL.
-        self._repository.revoke(record.id, now)
-        return record.user_id, self._create(record.user_id, record.family_id)
+        # Между чтением и отзывом есть await: параллельный запрос с тем же токеном
+        # мог отозвать его раньше. Отзыв атомарен (UPDATE ... WHERE revoked_at IS
+        # NULL), и проиграть может только один запрос; проигравший это повторное
+        # использование, как и в проверке выше.
+        if not await self._repository.revoke(record.id, now):
+            await self._reject_reuse(record.family_id, now)
+        return record.user_id, await self._create(record.user_id, record.family_id)
 
-    def revoke(self, token: str) -> None:
+    async def _reject_reuse(self, family_id: str, now: datetime) -> NoReturn:
+        await self._repository.revoke_family(family_id, now)
+        # Запрос закончится ошибкой 401, а при ошибке транзакция запроса
+        # откатывается. Отзыв цепочки обязан пережить этот откат, иначе вор,
+        # предъявивший старый токен, ничего не потеряет.
+        await self._repository.commit()
+        raise InvalidRefreshTokenError
+
+    async def revoke(self, token: str) -> None:
         """Завершает сессию: отзывает всю цепочку. Неизвестный токен игнорируется."""
-        record = self._repository.find_by_hash(hash_token(token))
+        record = await self._repository.find_by_hash(hash_token(token))
         if record is not None:
-            self._repository.revoke_family(record.family_id, self._clock())
+            await self._repository.revoke_family(record.family_id, self._clock())
 
-    def _create(self, user_id: int, family_id: str) -> IssuedRefreshToken:
+    async def _create(self, user_id: int, family_id: str) -> IssuedRefreshToken:
         token = secrets.token_urlsafe(32)
-        self._repository.add(
+        await self._repository.add(
             user_id=user_id,
             family_id=family_id,
             token_hash=hash_token(token),

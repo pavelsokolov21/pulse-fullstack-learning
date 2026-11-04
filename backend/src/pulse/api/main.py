@@ -14,22 +14,18 @@ from pulse.api.routers.monitors import router as monitors_router
 from pulse.api.settings import ApiSettings, get_settings
 from pulse.core.passwords import PasswordHasher
 from pulse.core.rate_limit import SlidingWindowRateLimiter
-from pulse.repositories.checks import CheckRepository
-from pulse.repositories.monitors import MonitorRepository
-from pulse.repositories.refresh_tokens import RefreshTokenRepository
-from pulse.repositories.users import UserRepository
+from pulse.repositories.database import create_engine, create_session_factory
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    # Состояние (репозитории, HTTP-клиент) создаётся на запуск приложения: у
+    # Состояние (пул соединений, HTTP-клиент) создаётся на запуск приложения: у
     # каждого приложения (и у каждого теста с `with TestClient(app)`) своё, а не
-    # глобальная переменная. Сервисы собираются поверх него в зависимостях.
+    # глобальная переменная. Репозитории и сервисы собираются поверх него в
+    # зависимостях, на каждый запрос.
     settings: ApiSettings = app.state.settings
-    app.state.monitor_repository = MonitorRepository()
-    app.state.check_repository = CheckRepository(settings.max_checks_per_monitor)
-    app.state.user_repository = UserRepository()
-    app.state.refresh_token_repository = RefreshTokenRepository()
+    engine = create_engine(settings.database_url.get_secret_value())
+    app.state.session_factory = create_session_factory(engine)
     app.state.password_hasher = PasswordHasher()
     app.state.login_rate_limiter = SlidingWindowRateLimiter(
         settings.login_rate_limit_attempts, settings.login_rate_limit_window_seconds
@@ -45,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             yield
     finally:
         logger.setLevel(previous_level)
+        await engine.dispose()
 
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:

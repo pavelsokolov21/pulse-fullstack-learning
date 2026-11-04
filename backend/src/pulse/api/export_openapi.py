@@ -2,8 +2,8 @@
 
     uv run python -m pulse.api.export_openapi ../frontend/openapi.json
 
-Схема строится из объекта приложения, поэтому запуск не нужен. Секрет JWT на
-схему не влияет, подставляется заглушка: так команда работает без окружения.
+Схема строится из объекта приложения, поэтому запуск не нужен. Секрет JWT и адрес
+базы на схему не влияют, подставляются заглушки: так команда работает без окружения.
 """
 
 import argparse
@@ -13,12 +13,15 @@ from pathlib import Path
 from typing import Any
 
 PLACEHOLDER_SECRET = "openapi-export-placeholder-not-a-real-secret"
+# Подключения к базе при построении схемы нет: адрес нужен только настройкам.
+PLACEHOLDER_DATABASE_URL = "postgresql+psycopg://placeholder@localhost/placeholder"
 
 
 def build_schema() -> dict[str, Any]:
     # `pulse.api.main` на импорте создаёт глобальное `app` и требует секрет, поэтому
     # заглушка ставится до импорта, и сам импорт отложен до этого места.
     os.environ.setdefault("PULSE_API_JWT_SECRET", PLACEHOLDER_SECRET)
+    os.environ.setdefault("PULSE_API_DATABASE_URL", PLACEHOLDER_DATABASE_URL)
     from pulse.api.main import create_app
 
     return create_app().openapi()

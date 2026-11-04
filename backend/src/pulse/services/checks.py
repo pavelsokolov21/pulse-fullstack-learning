@@ -31,11 +31,13 @@ class CheckService:
     async def run(self, actor: User, monitor_id: int) -> Check:
         """Проверяет монитор и сохраняет результат.
 
-        Если монитор удалили, пока шёл запрос, результат не сохраняется (иначе
-        остались бы проверки несуществующего монитора) и поднимается
+        Если монитор удалили, пока шёл запрос, результат не сохраняется (внешний
+        ключ не даст записать проверку несуществующего монитора) и поднимается
         `MonitorNotFoundError`.
         """
-        monitor = self._monitors.get(actor, monitor_id)
+        monitor = await self._monitors.get(actor, monitor_id)
+        # Дальше долгое ожидание ответа сайта: отдаём соединение с базой в пул.
+        await self._checks.release_connection()
 
         try:
             result = await check_url(self._client, monitor.url, timeout=monitor.timeout)
@@ -50,18 +52,17 @@ class CheckService:
                 error=f"Invalid URL: {exc}",
             )
 
-        self._monitors.get(actor, monitor_id)  # за время await монитор мог исчезнуть
-
-        return self._checks.add(
+        return await self._checks.add(
             monitor_id=monitor_id,
             url=result.url,
             status_code=result.status_code,
             latency_ms=result.latency_ms,
             error=result.error,
             checked_at=self._clock(),
-            ok=result.ok,
         )
 
-    def list_recent(self, actor: User, monitor_id: int, limit: int) -> list[Check]:
-        self._monitors.get(actor, monitor_id)
-        return self._checks.list_recent(monitor_id, limit)
+    async def list_recent(
+        self, actor: User, monitor_id: int, limit: int
+    ) -> list[Check]:
+        await self._monitors.get(actor, monitor_id)
+        return await self._checks.list_recent(monitor_id, limit)

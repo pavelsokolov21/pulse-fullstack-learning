@@ -72,6 +72,30 @@ def test_checker_detects_a_violation(tmp_path: Path) -> None:
     assert imported_packages(bad) == {"api", "services"}
 
 
+# Драйвер и ORM знает только слой репозиториев: сервисы и API работают с
+# доменными объектами и не могут зависеть от того, чем хранятся данные.
+DATABASE_PACKAGES = {"sqlalchemy", "psycopg", "asyncpg", "alembic"}
+
+
+def test_database_libraries_are_only_used_in_repositories() -> None:
+    outside = [
+        str(path.relative_to(SRC))
+        for path in sorted(SRC.rglob("*.py"))
+        if path.relative_to(SRC).parts[0] != "repositories"
+        and any(m.split(".")[0] in DATABASE_PACKAGES for m in imported_modules(path))
+    ]
+
+    assert outside == []
+
+
+def test_database_check_detects_a_violation(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.py"
+    bad.write_text("from sqlalchemy import select\nimport psycopg.errors\n")
+
+    used = {m.split(".")[0] for m in imported_modules(bad)}
+    assert used & DATABASE_PACKAGES == {"sqlalchemy", "psycopg"}
+
+
 def test_fastapi_is_only_used_in_api_layer() -> None:
     # Остальные слои не должны знать про HTTP-фреймворк.
     outside = [

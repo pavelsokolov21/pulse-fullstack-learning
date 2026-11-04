@@ -1,10 +1,10 @@
-import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 from pydantic import SecretStr
+from sqlalchemy import delete, func, select
 
 from pulse.core.passwords import PasswordHasher
 from pulse.domain.errors import (
@@ -16,6 +16,8 @@ from pulse.domain.errors import (
     TokenExpiredError,
 )
 from pulse.domain.users import MAX_PASSWORD_LENGTH, Role
+from pulse.repositories.database import Session
+from pulse.repositories.models import UserModel
 from pulse.repositories.refresh_tokens import RefreshTokenRepository
 from pulse.repositories.users import UserRepository
 from pulse.services.auth import AuthService
@@ -64,8 +66,8 @@ def clock() -> Clock:
 
 
 @pytest.fixture
-def users() -> UserRepository:
-    return UserRepository()
+def users(session: Session) -> UserRepository:
+    return UserRepository(session)
 
 
 @pytest.fixture
@@ -74,13 +76,17 @@ def hasher() -> SpyHasher:
 
 
 @pytest.fixture
-def auth(users: UserRepository, hasher: SpyHasher, clock: Clock) -> AuthService:
+def auth(
+    session: Session, users: UserRepository, hasher: SpyHasher, clock: Clock
+) -> AuthService:
     tokens = TokenService(
         SecretStr("service-test-secret-long-enough-for-hs256"),
         timedelta(minutes=15),
         clock,
     )
-    refresh = RefreshTokenService(RefreshTokenRepository(), timedelta(days=7), clock)
+    refresh = RefreshTokenService(
+        RefreshTokenRepository(session), timedelta(days=7), clock
+    )
     return AuthService(users, hasher, tokens, refresh)
 
 
@@ -92,8 +98,7 @@ async def test_register_creates_a_user(
 ) -> None:
     user = await auth.register("alice@example.com", PASSWORD)
 
-    assert user.id == 1
-    assert users.get(user.id) == user
+    assert await users.get(user.id) == user
 
 
 async def test_register_stores_a_hash_not_the_password(auth: AuthService) -> None:
@@ -113,31 +118,16 @@ async def test_register_normalizes_email(auth: AuthService) -> None:
     "again", ["alice@example.com", "ALICE@example.com", " alice@EXAMPLE.com "]
 )
 async def test_register_rejects_duplicate_email_in_any_form(
-    auth: AuthService, users: UserRepository, again: str
+    auth: AuthService, users: UserRepository, session: Session, again: str
 ) -> None:
     await auth.register("alice@example.com", PASSWORD)
 
     with pytest.raises(DuplicateUserError):
         await auth.register(again, "another password")
 
-    assert users.find_by_email("alice@example.com") is not None
-    assert users.get(2) is None
-
-
-async def test_concurrent_registrations_of_one_email_create_one_user(
-    auth: AuthService, users: UserRepository
-) -> None:
-    # Хеширование это await: за это время такой же запрос успевает проверить email.
-    results = await asyncio.gather(
-        *(auth.register("race@example.com", PASSWORD) for _ in range(5)),
-        return_exceptions=True,
-    )
-
-    created = [r for r in results if not isinstance(r, BaseException)]
-    errors = [r for r in results if isinstance(r, DuplicateUserError)]
-    assert len(created) == 1
-    assert len(errors) == 4
-    assert users.get(2) is None
+    assert await users.find_by_email("alice@example.com") is not None
+    # Второй пользователь не создан, даже частично.
+    assert await session.scalar(select(func.count()).select_from(UserModel)) == 1
 
 
 async def test_same_password_gives_different_hashes(auth: AuthService) -> None:
@@ -156,7 +146,7 @@ async def test_login_returns_a_token_for_the_user(auth: AuthService) -> None:
     pair = await auth.login("alice@example.com", PASSWORD)
 
     assert pair.access.expires_in == 900
-    assert auth.authenticate(pair.access.token) == user
+    assert await auth.authenticate(pair.access.token) == user
 
 
 @pytest.mark.parametrize("email", ["ALICE@example.com", "  alice@example.com  "])
@@ -240,7 +230,7 @@ async def test_authenticate_returns_the_user(auth: AuthService) -> None:
     user = await auth.register("alice@example.com", PASSWORD)
     pair = await auth.login("alice@example.com", PASSWORD)
 
-    assert auth.authenticate(pair.access.token) == user
+    assert await auth.authenticate(pair.access.token) == user
 
 
 async def test_authenticate_rejects_expired_token(
@@ -251,31 +241,24 @@ async def test_authenticate_rejects_expired_token(
     clock.now += timedelta(minutes=15)
 
     with pytest.raises(TokenExpiredError):
-        auth.authenticate(pair.access.token)
+        await auth.authenticate(pair.access.token)
 
 
 async def test_authenticate_rejects_garbage(auth: AuthService) -> None:
     with pytest.raises(InvalidTokenError):
-        auth.authenticate("not-a-token")
+        await auth.authenticate("not-a-token")
 
 
-async def test_token_of_a_vanished_user_is_rejected(auth: AuthService) -> None:
-    # Валидная подпись, но пользователя с таким id нет (например, удалён).
-    other = AuthService(
-        UserRepository(),
-        SpyHasher(),
-        TokenService(
-            SecretStr("service-test-secret-long-enough-for-hs256"),
-            timedelta(minutes=15),
-            lambda: NOW,
-        ),
-        RefreshTokenService(RefreshTokenRepository(), timedelta(days=7), lambda: NOW),
-    )
-    await other.register("ghost@example.com", PASSWORD)
-    pair = await other.login("ghost@example.com", PASSWORD)
+async def test_token_of_a_vanished_user_is_rejected(
+    auth: AuthService, session: Session
+) -> None:
+    # Валидная подпись, но пользователя с таким id уже нет (например, удалён).
+    ghost = await auth.register("ghost@example.com", PASSWORD)
+    pair = await auth.login("ghost@example.com", PASSWORD)
+    await session.execute(delete(UserModel).where(UserModel.id == ghost.id))
 
     with pytest.raises(InvalidTokenError):
-        auth.authenticate(pair.access.token)
+        await auth.authenticate(pair.access.token)
 
 
 # --- роль ------------------------------------------------------------------
@@ -315,10 +298,10 @@ async def test_refresh_returns_a_new_pair_for_the_same_user(
     user = await auth.register("alice@example.com", PASSWORD)
     first = await auth.login("alice@example.com", PASSWORD)
 
-    second = auth.refresh(first.refresh.token)
+    second = await auth.refresh(first.refresh.token)
 
     assert second.refresh.token != first.refresh.token
-    assert auth.authenticate(second.access.token) == user
+    assert await auth.authenticate(second.access.token) == user
 
 
 async def test_refresh_issues_access_for_the_owner_of_the_token(
@@ -326,21 +309,20 @@ async def test_refresh_issues_access_for_the_owner_of_the_token(
 ) -> None:
     await auth.register("alice@example.com", PASSWORD)
     bob = await auth.register("bob@example.com", PASSWORD)
-    assert bob.id != 1
     session = await auth.login("bob@example.com", PASSWORD)
 
-    renewed = auth.refresh(session.refresh.token)
+    renewed = await auth.refresh(session.refresh.token)
 
-    assert auth.authenticate(renewed.access.token) == bob
+    assert await auth.authenticate(renewed.access.token) == bob
 
 
 async def test_refresh_rejects_the_old_token_after_rotation(auth: AuthService) -> None:
     await auth.register("alice@example.com", PASSWORD)
     first = await auth.login("alice@example.com", PASSWORD)
-    auth.refresh(first.refresh.token)
+    await auth.refresh(first.refresh.token)
 
     with pytest.raises(InvalidRefreshTokenError):
-        auth.refresh(first.refresh.token)
+        await auth.refresh(first.refresh.token)
 
 
 async def test_refresh_rejects_an_expired_token(
@@ -351,26 +333,26 @@ async def test_refresh_rejects_an_expired_token(
     clock.now += timedelta(days=7)
 
     with pytest.raises(RefreshTokenExpiredError):
-        auth.refresh(pair.refresh.token)
+        await auth.refresh(pair.refresh.token)
 
 
 async def test_refresh_rejects_unknown_token(auth: AuthService) -> None:
     with pytest.raises(InvalidRefreshTokenError):
-        auth.refresh("never-issued")
+        await auth.refresh("never-issued")
 
 
 async def test_logout_ends_the_session(auth: AuthService) -> None:
     await auth.register("alice@example.com", PASSWORD)
     pair = await auth.login("alice@example.com", PASSWORD)
 
-    auth.logout(pair.refresh.token)
+    await auth.logout(pair.refresh.token)
 
     with pytest.raises(InvalidRefreshTokenError):
-        auth.refresh(pair.refresh.token)
+        await auth.refresh(pair.refresh.token)
 
 
 @pytest.mark.parametrize("token", [None, "", "never-issued"])
 async def test_logout_without_a_valid_token_is_a_noop(
     auth: AuthService, token: str | None
 ) -> None:
-    auth.logout(token)
+    await auth.logout(token)

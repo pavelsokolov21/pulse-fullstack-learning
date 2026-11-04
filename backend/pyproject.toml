@@ -8,12 +8,15 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.20.1",
     "fastapi[standard]>=0.162.0",
     "httpx>=0.28.1",
+    "psycopg[binary]>=3.3.7",
     "pwdlib[argon2]>=0.3.1",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.16.1",
     "pyjwt>=2.15.1",
+    "sqlalchemy[asyncio]>=2.0",
     "typer>=0.27.3",
 ]
 
@@ -29,7 +32,6 @@ build-backend = "uv_build"
 dev = [
     "faker>=40.44.0",
     "poethepoet>=0.48.0",
-    "psycopg[binary]>=3.3.7",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -45,6 +47,7 @@ watch = "ptw . --now"
 check = ["lint", "types", "test"]
 dev = "fastapi dev"
 openapi = "python -m pulse.api.export_openapi ../frontend/openapi.json"
+migrate = "alembic upgrade head"
 
 [tool.fastapi]
 entrypoint = "pulse.api.main:app"

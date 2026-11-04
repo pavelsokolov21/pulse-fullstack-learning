@@ -1,69 +1,97 @@
 import pytest
 
+from pulse.domain.errors import DuplicateUserError
 from pulse.domain.users import Role
+from pulse.repositories.database import Session
 from pulse.repositories.users import UserRepository
 
 
-def test_create_assigns_increasing_ids_from_one() -> None:
-    repo = UserRepository()
+@pytest.fixture
+def repo(session: Session) -> UserRepository:
+    return UserRepository(session)
 
-    ids = [
-        repo.create(email=f"{n}@example.com", password_hash="h", role=Role.MANAGER).id
+
+async def test_create_assigns_increasing_ids(repo: UserRepository) -> None:
+    users = [
+        await repo.create(
+            email=f"{n}@example.com", password_hash="h", role=Role.MANAGER
+        )
         for n in range(3)
     ]
 
-    assert ids == [1, 2, 3]
+    ids = [u.id for u in users]
+    assert ids == sorted(set(ids))
 
 
-def test_get_returns_user_or_none() -> None:
-    repo = UserRepository()
-    user = repo.create(email="a@example.com", password_hash="h", role=Role.MANAGER)
+async def test_get_returns_user_or_none(repo: UserRepository) -> None:
+    user = await repo.create(
+        email="a@example.com", password_hash="h", role=Role.MANAGER
+    )
 
-    assert repo.get(user.id) == user
-    assert repo.get(99) is None
-
-
-def test_find_by_email_is_exact() -> None:
-    repo = UserRepository()
-    user = repo.create(email="a@example.com", password_hash="h", role=Role.MANAGER)
-
-    assert repo.find_by_email("a@example.com") == user
-    assert repo.find_by_email("A@example.com") is None  # нормализует сервис
-    assert repo.find_by_email("a@example.co") is None
-    assert repo.find_by_email("") is None
+    assert await repo.get(user.id) == user
+    assert await repo.get(user.id + 1000) is None
 
 
-def test_stored_user_keeps_hash_and_email() -> None:
-    user = UserRepository().create(
+async def test_find_by_email_is_exact(repo: UserRepository) -> None:
+    user = await repo.create(
+        email="a@example.com", password_hash="h", role=Role.MANAGER
+    )
+
+    assert await repo.find_by_email("a@example.com") == user
+    assert await repo.find_by_email("A@example.com") is None  # нормализует сервис
+    assert await repo.find_by_email("a@example.co") is None
+    assert await repo.find_by_email("") is None
+
+
+async def test_stored_user_keeps_hash_and_email(repo: UserRepository) -> None:
+    created = await repo.create(
         email="a@example.com", password_hash="the-hash", role=Role.MANAGER
     )
 
-    assert (user.email, user.password_hash) == ("a@example.com", "the-hash")
+    stored = await repo.get(created.id)
+    assert stored is not None
+    assert (stored.email, stored.password_hash) == ("a@example.com", "the-hash")
 
 
-def test_repositories_do_not_share_state() -> None:
-    first, second = UserRepository(), UserRepository()
-    first.create(email="a@example.com", password_hash="h", role=Role.MANAGER)
+@pytest.mark.parametrize("role", list(Role))
+async def test_create_keeps_the_given_role(repo: UserRepository, role: Role) -> None:
+    created = await repo.create(email="a@x.io", password_hash="h", role=role)
 
-    assert second.find_by_email("a@example.com") is None
-
-
-def test_create_keeps_the_given_role() -> None:
-    repo = UserRepository()
-
-    assert (
-        repo.create(email="a@x.io", password_hash="h", role=Role.VIEWER).role
-        is Role.VIEWER
-    )
-    assert (
-        repo.create(email="b@x.io", password_hash="h", role=Role.ADMIN).role
-        is Role.ADMIN
-    )
+    stored = await repo.get(created.id)
+    assert stored is not None
+    assert stored.role is role
 
 
-def test_create_requires_an_explicit_role() -> None:
+async def test_create_requires_an_explicit_role(repo: UserRepository) -> None:
     # Как NOT NULL без DEFAULT в БД: роль задаёт сервис, а не умолчание хранилища.
-    repo = UserRepository()
-
     with pytest.raises(TypeError):
-        repo.create(email="a@x.io", password_hash="h")  # pyright: ignore[reportCallIssue]
+        await repo.create(email="a@x.io", password_hash="h")  # pyright: ignore[reportCallIssue]
+
+
+async def test_duplicate_email_raises_domain_error(repo: UserRepository) -> None:
+    await repo.create(email="a@example.com", password_hash="h", role=Role.MANAGER)
+
+    with pytest.raises(DuplicateUserError):
+        await repo.create(email="a@example.com", password_hash="h2", role=Role.VIEWER)
+
+
+async def test_session_stays_usable_after_duplicate(repo: UserRepository) -> None:
+    # Нарушение откатывает только SAVEPOINT вставки, а не всю транзакцию.
+    first = await repo.create(
+        email="a@example.com", password_hash="h", role=Role.MANAGER
+    )
+    with pytest.raises(DuplicateUserError):
+        await repo.create(email="a@example.com", password_hash="h", role=Role.MANAGER)
+
+    assert await repo.get(first.id) == first
+    assert (
+        await repo.create(email="b@example.com", password_hash="h", role=Role.MANAGER)
+    ).email == "b@example.com"
+
+
+async def test_database_rejects_unnormalized_email(repo: UserRepository) -> None:
+    # Страховка схемы на случай, если сервис забудет normalize_email (CHECK в БД).
+    from sqlalchemy.exc import IntegrityError
+
+    with pytest.raises(IntegrityError, match="users_email_normalized"):
+        await repo.create(email="A@Example.com", password_hash="h", role=Role.MANAGER)

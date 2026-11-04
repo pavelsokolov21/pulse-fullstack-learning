@@ -125,7 +125,7 @@ def test_forbidden_write_changes_nothing(
 
     auth_client.post("/monitors", json=BODY, headers=viewer)
 
-    assert auth_client.get("/monitors", headers=viewer).json() == []
+    assert auth_client.get("/monitors", headers=viewer).json()["items"] == []
 
 
 def test_403_is_not_an_authentication_error(
@@ -196,7 +196,9 @@ def test_list_shows_only_own_monitors(auth_client: TestClient, sign_in: SignIn) 
     create(auth_client, alice, "a.test")
     create(auth_client, bob, "b.test")
 
-    urls = [m["url"] for m in auth_client.get("/monitors", headers=alice).json()]
+    urls = [
+        m["url"] for m in auth_client.get("/monitors", headers=alice).json()["items"]
+    ]
 
     assert urls == ["https://a.test"]
 
@@ -358,7 +360,9 @@ def test_admin_sees_all_monitors(auth_client: TestClient, sign_in: SignIn) -> No
     create(auth_client, alice, "a.test")
     create(auth_client, bob, "b.test")
 
-    urls = [m["url"] for m in auth_client.get("/monitors", headers=admin).json()]
+    urls = [
+        m["url"] for m in auth_client.get("/monitors", headers=admin).json()["items"]
+    ]
 
     assert urls == ["https://a.test", "https://b.test"]
 
@@ -394,3 +398,35 @@ def test_deleted_monitor_takes_its_checks_with_it(
         auth_client.get(f"/monitors/{monitor['id']}/checks", headers=alice).status_code
         == 404
     )
+
+
+def test_admin_list_shows_each_owners_email_and_the_full_total(
+    auth_client: TestClient, sign_in: SignIn
+) -> None:
+    alice, bob = sign_in("alice@example.com"), sign_in("bob@example.com")
+    admin = sign_in("admin@example.com", Role.ADMIN)
+    create(auth_client, alice, "a.test")
+    create(auth_client, bob, "b.test")
+
+    page = auth_client.get("/monitors", headers=admin).json()
+
+    assert page["total"] == 2
+    assert [(m["url"], m["owner_email"]) for m in page["items"]] == [
+        ("https://a.test", "alice@example.com"),
+        ("https://b.test", "bob@example.com"),
+    ]
+
+
+def test_manager_total_counts_only_own_monitors(
+    auth_client: TestClient, sign_in: SignIn
+) -> None:
+    alice, bob = sign_in("alice@example.com"), sign_in("bob@example.com")
+    create(auth_client, alice, "a.test")
+    create(auth_client, bob, "b.test")
+    create(auth_client, bob, "c.test")
+
+    page = auth_client.get("/monitors", headers=alice).json()
+
+    # Чужие мониторы не видны ни в items, ни в total: иначе число выдало бы их.
+    assert page["total"] == 1
+    assert [m["owner_email"] for m in page["items"]] == ["alice@example.com"]

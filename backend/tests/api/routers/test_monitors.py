@@ -1,16 +1,16 @@
 from collections.abc import Iterator
 from datetime import timedelta
+from typing import Any
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
 from pulse.api.deps import get_monitor_repository, get_monitor_service
 from pulse.api.main import app
-from pulse.domain.monitors import Monitor
+from pulse.domain.monitors import Monitor, MonitorWithOwner
+from pulse.domain.pagination import Page
 from pulse.domain.users import User
-from pulse.repositories.checks import CheckRepository
-from pulse.repositories.monitors import MonitorRepository
-from pulse.services.monitors import MonitorService
 
 NOT_FOUND_BODY = {"code": "monitor_not_found", "message": "Монитор 999 не найден"}
 
@@ -89,7 +89,7 @@ def test_create_rejects_invalid_body_with_422(
     response = client.post("/monitors", json=body)
 
     assert response.status_code == 422
-    assert client.get("/monitors").json() == []
+    assert client.get("/monitors").json()["items"] == []
 
 
 # --- GET /monitors ---------------------------------------------------------
@@ -99,16 +99,62 @@ def test_list_is_empty_at_start(client: TestClient) -> None:
     response = client.get("/monitors")
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {"items": [], "total": 0, "limit": 20, "offset": 0}
 
 
 def test_list_returns_monitors_in_creation_order(client: TestClient) -> None:
     create(client, url="a.test")
     create(client, url="b.test")
 
-    urls = [m["url"] for m in client.get("/monitors").json()]
+    urls = [m["url"] for m in client.get("/monitors").json()["items"]]
 
     assert urls == ["https://a.test", "https://b.test"]
+
+
+def test_list_items_carry_the_owner_email(client: TestClient) -> None:
+    create(client, url="a.test")
+
+    [item] = client.get("/monitors").json()["items"]
+
+    assert item["owner_email"] == "tester@example.com"
+    assert item["owner_id"] == 1
+
+
+def test_list_is_paginated_with_total(client: TestClient) -> None:
+    for n in range(5):
+        create(client, url=f"{n}.test")
+
+    body = client.get("/monitors", params={"limit": 2, "offset": 2}).json()
+
+    assert (body["total"], body["limit"], body["offset"]) == (5, 2, 2)
+    assert [m["url"] for m in body["items"]] == ["https://2.test", "https://3.test"]
+
+
+def test_last_page_may_be_partial_and_the_one_after_it_empty(
+    client: TestClient,
+) -> None:
+    for n in range(3):
+        create(client, url=f"{n}.test")
+
+    last = client.get("/monitors", params={"limit": 2, "offset": 2}).json()
+    beyond = client.get("/monitors", params={"limit": 2, "offset": 4}).json()
+
+    assert len(last["items"]) == 1
+    assert (beyond["items"], beyond["total"]) == ([], 3)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"limit": 0}, {"limit": 101}, {"limit": -1}, {"offset": -1}, {"limit": "x"}],
+)
+def test_list_rejects_invalid_pagination(
+    client: TestClient, params: dict[str, Any]
+) -> None:
+    assert client.get("/monitors", params=params).status_code == 422
+
+
+def test_list_accepts_the_maximum_page_size(client: TestClient) -> None:
+    assert client.get("/monitors", params={"limit": 100}).status_code == 200
 
 
 # --- GET /monitors/{id} ----------------------------------------------------
@@ -252,7 +298,7 @@ def test_delete_keeps_other_monitors(client: TestClient) -> None:
 
     client.delete(f"/monitors/{first['id']}")
 
-    assert client.get("/monitors").json() == [second]
+    assert [m["id"] for m in client.get("/monitors").json()["items"]] == [second["id"]]
 
 
 def test_delete_unknown_id_returns_404_with_error_body(client: TestClient) -> None:
@@ -272,70 +318,74 @@ def test_second_delete_returns_404(client: TestClient) -> None:
 # --- хранилище и зависимости -----------------------------------------------
 
 
-def test_each_app_start_gets_a_fresh_store() -> None:
+def test_data_survives_an_app_restart() -> None:
+    # Данные лежат в PostgreSQL, а не в памяти приложения.
     with TestClient(app) as first:
-        create(first)
+        created = create(first)
 
     with TestClient(app) as second:
-        assert second.get("/monitors").json() == []
+        assert [m["id"] for m in second.get("/monitors").json()["items"]] == [
+            created["id"]
+        ]
 
 
 def test_repository_is_injected_through_depends() -> None:
     # Подмена репозитория достаточна: сервис собирается поверх него.
-    repository = MonitorRepository()
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.created: list[str] = []
+
+        async def create(
+            self, *, owner_id: int, url: str, interval: timedelta, timeout: float
+        ) -> Monitor:
+            self.created.append(url)
+            return Monitor(1, owner_id, url, interval, timeout)
+
+    repository = FakeRepository()
     app.dependency_overrides[get_monitor_repository] = lambda: repository
     try:
         with TestClient(app) as client:
             create(client, url="injected.test")
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_monitor_repository, None)
 
-    assert [m.url for m in repository.list_all()] == ["https://injected.test"]
-
-
-def test_service_is_injected_through_depends() -> None:
-    repository = MonitorRepository()
-    service = MonitorService(repository, CheckRepository())
-    app.dependency_overrides[get_monitor_service] = lambda: service
-    try:
-        with TestClient(app) as client:
-            create(client, url="injected.test")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert [m.url for m in repository.list_all()] == ["https://injected.test"]
+    assert repository.created == ["https://injected.test"]
 
 
 def test_router_works_through_a_fake_service() -> None:
     class FakeService:
-        def list_all(self, actor: User) -> list[Monitor]:
-            return [
-                Monitor(7, actor.id, "https://fake.test", timedelta(seconds=5), 1.0)
-            ]
+        async def list_page(
+            self, actor: User, *, limit: int, offset: int
+        ) -> Page[MonitorWithOwner]:
+            item = MonitorWithOwner(
+                7, actor.id, "https://fake.test", timedelta(seconds=5), 1.0, "o@x.io"
+            )
+            return Page([item], total=41)
 
     app.dependency_overrides[get_monitor_service] = lambda: FakeService()
     try:
         with TestClient(app) as client:
             body = client.get("/monitors").json()
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_monitor_service, None)
 
-    assert body == [
-        {
-            "id": 7,
-            "owner_id": 1,
-            "url": "https://fake.test",
-            "interval": 5.0,
-            "timeout": 1.0,
-        }
-    ]
+    assert body["total"] == 41
+    assert [m["id"] for m in body["items"]] == [7]
+    assert body["items"][0]["owner_email"] == "o@x.io"
 
 
-def test_service_is_built_over_the_app_repository(client: TestClient) -> None:
-    create(client, url="a.test")
+def test_created_monitor_is_stored_in_postgres(
+    client: TestClient, admin_db: psycopg.Connection[tuple[object, ...]]
+) -> None:
+    created = create(client, url="a.test", timeout=3)
 
-    repository: MonitorRepository = app.state.monitor_repository
-    assert [m.url for m in repository.list_all()] == ["https://a.test"]
+    # Прямой запрос суперпользователя другим соединением: значит, коммит состоялся
+    # до отправки ответа, а не остался в незавершённой транзакции.
+    row = admin_db.execute(
+        "SELECT url, interval_seconds, timeout_seconds FROM monitors WHERE id = %s",
+        (created["id"],),
+    ).fetchone()
+    assert row == ("https://a.test", 300, 3.0)
 
 
 def test_openapi_documents_statuses_and_error_model(client: TestClient) -> None:
@@ -364,7 +414,7 @@ def test_create_rejects_non_positive_or_boolean_interval(
     response = post_raw(client, f'{{"url": "a.test", "interval": {interval}}}')
 
     assert response.status_code == 422
-    assert client.get("/monitors").json() == []
+    assert client.get("/monitors").json()["items"] == []
 
 
 def test_create_accepts_numeric_interval_in_seconds(client: TestClient) -> None:
@@ -526,8 +576,7 @@ def test_rejected_duplicate_is_not_stored(client: TestClient) -> None:
     create(client, url="a.test")
     client.post("/monitors", json={"url": "a.test", "interval": "5m"})
 
-    assert len(client.get("/monitors").json()) == 1
-    assert create(client, url="b.test")["id"] == 2
+    assert client.get("/monitors").json()["total"] == 1
 
 
 def test_url_can_be_created_again_after_delete(client: TestClient) -> None:
@@ -597,7 +646,7 @@ def test_create_rejects_interval_below_the_minimum(client: TestClient) -> None:
     (error,) = response.json()["errors"]
     assert error["loc"] == ["body", "interval"]
     assert "от 30 секунд до 24 часов" in error["msg"]
-    assert client.get("/monitors").json() == []
+    assert client.get("/monitors").json()["items"] == []
 
 
 @pytest.mark.parametrize("interval", ["25h", 86401, 30.5])

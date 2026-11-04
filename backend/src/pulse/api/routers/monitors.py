@@ -1,6 +1,6 @@
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from pulse.api.deps import (
     CurrentUserDep,
@@ -9,10 +9,15 @@ from pulse.api.deps import (
     require_writer,
 )
 from pulse.api.errors import ErrorResponse, ValidationErrorResponse
-from pulse.api.schemas.monitors import MonitorCreate, MonitorRead, MonitorUpdate
+from pulse.api.schemas.monitors import (
+    MonitorCreate,
+    MonitorListItem,
+    MonitorPage,
+    MonitorRead,
+    MonitorUpdate,
+)
+from pulse.domain.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 
-# Обработчики `async def` без await намеренно: так они выполняются в потоке
-# event loop, и репозиторий в памяти не требует блокировок. `def` ушёл бы в пул потоков.
 router = APIRouter(
     prefix="/monitors",
     tags=["monitors"],
@@ -23,6 +28,10 @@ router = APIRouter(
         status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ValidationErrorResponse},
     },
 )
+
+DEFAULT_LIMIT = DEFAULT_PAGE_SIZE
+Limit = Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)]
+Offset = Annotated[int, Query(ge=0)]
 
 FORBIDDEN: dict[int | str, dict[str, Any]] = {
     status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}
@@ -44,21 +53,31 @@ CONFLICT: dict[int | str, dict[str, Any]] = {
 async def create_monitor(
     body: MonitorCreate, service: MonitorServiceDep, user: CurrentUserDep
 ) -> MonitorRead:
-    return MonitorRead.model_validate(service.create(user, **body.model_dump()))
+    return MonitorRead.model_validate(await service.create(user, **body.model_dump()))
 
 
 @router.get("")
 async def list_monitors(
-    service: MonitorServiceDep, user: CurrentUserDep
-) -> list[MonitorRead]:
-    return [MonitorRead.model_validate(m) for m in service.list_all(user)]
+    service: MonitorServiceDep,
+    user: CurrentUserDep,
+    limit: Limit = DEFAULT_LIMIT,
+    offset: Offset = 0,
+) -> MonitorPage:
+    """Страница мониторов с email владельца: админу все, остальным свои."""
+    page = await service.list_page(user, limit=limit, offset=offset)
+    return MonitorPage(
+        items=[MonitorListItem.model_validate(m) for m in page.items],
+        total=page.total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/{monitor_id}", responses=NOT_FOUND)
 async def get_monitor(
     monitor_id: int, service: MonitorServiceDep, user: CurrentUserDep
 ) -> MonitorRead:
-    return MonitorRead.model_validate(service.get(user, monitor_id))
+    return MonitorRead.model_validate(await service.get(user, monitor_id))
 
 
 @router.patch(
@@ -73,7 +92,8 @@ async def update_monitor(
     user: CurrentUserDep,
 ) -> MonitorRead:
     changes = body.model_dump(exclude_unset=True)
-    return MonitorRead.model_validate(service.update(user, monitor_id, **changes))
+    updated = await service.update(user, monitor_id, **changes)
+    return MonitorRead.model_validate(updated)
 
 
 @router.delete(
@@ -85,4 +105,4 @@ async def update_monitor(
 async def delete_monitor(
     monitor_id: int, service: MonitorServiceDep, user: CurrentUserDep
 ) -> None:
-    service.delete(user, monitor_id)
+    await service.delete(user, monitor_id)

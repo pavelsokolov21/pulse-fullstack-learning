@@ -94,7 +94,7 @@ async def refresh(
     """Меняет refresh-cookie на новую пару токенов (ротация)."""
     if not refresh_token:
         raise MissingTokenError
-    pair = auth.refresh(refresh_token)
+    pair = await auth.refresh(refresh_token)
     return _respond_with_tokens(pair, response, settings)
 
 
@@ -106,7 +106,7 @@ async def logout(
     refresh_token: RefreshCookie = None,
 ) -> None:
     """Отзывает сессию и сбрасывает cookie. Повторный вызов тоже даёт 204."""
-    auth.logout(refresh_token)
+    await auth.logout(refresh_token)
     clear_refresh_cookie(response, settings)
 
 

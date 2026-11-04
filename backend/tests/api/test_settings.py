@@ -200,6 +200,81 @@ def test_validation_error_does_not_leak_the_secret(
     assert "too-short-secret" not in repr(exc_info.value.errors(include_input=False))
 
 
+# --- база данных ----------------------------------------------------------
+
+DB_URL = "postgresql+psycopg://pulse_app:very-distinctive-pw@db.internal:5432/pulse"
+
+
+def test_database_url_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PULSE_API_DATABASE_URL")
+
+    with pytest.raises(ValidationError) as exc_info:
+        settings_with()
+
+    errors = exc_info.value.errors()
+    assert [(e["loc"], e["type"]) for e in errors] == [(("database_url",), "missing")]
+
+
+def test_database_url_has_no_default() -> None:
+    # Адрес с паролем не должен жить в коде ни в каком виде, даже «для разработки».
+    assert ApiSettings.model_fields["database_url"].is_required()
+
+
+def test_database_url_is_read_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PULSE_API_DATABASE_URL", DB_URL)
+
+    assert settings_with().database_url.get_secret_value() == DB_URL
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:p@h/db",
+        "postgresql+psycopg2://u:p@h/db",
+        "postgresql+asyncpg://u:p@h/db",
+        "sqlite+aiosqlite:///pulse.db",
+        "mysql://u:p@h/db",
+        "",
+    ],
+)
+def test_database_url_must_use_the_async_psycopg_driver(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    monkeypatch.setenv("PULSE_API_DATABASE_URL", url)
+
+    with pytest.raises(ValidationError) as exc_info:
+        settings_with()
+
+    assert [str(e["loc"][0]) for e in exc_info.value.errors()] == ["database_url"]
+
+
+def test_database_url_password_is_hidden_everywhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PULSE_API_DATABASE_URL", DB_URL)
+    settings = settings_with()
+
+    assert "very-distinctive-pw" not in repr(settings)
+    assert "very-distinctive-pw" not in str(settings)
+    assert "very-distinctive-pw" not in str(settings.model_dump())
+    assert "very-distinctive-pw" not in settings.model_dump_json()
+
+
+def test_invalid_database_url_error_does_not_leak_the_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "PULSE_API_DATABASE_URL", "postgresql://u:very-distinctive-pw@h/db"
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        settings_with()
+
+    assert "very-distinctive-pw" not in str(exc_info.value)
+
+
 def test_access_token_lifetime_defaults_to_fifteen_minutes() -> None:
     assert settings_with().access_token_ttl_minutes == 15
 
