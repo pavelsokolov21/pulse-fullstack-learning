@@ -21,6 +21,7 @@ from sqlalchemy import (
     DateTime,
     Double,
     ForeignKey,
+    ForeignKeyConstraint,
     Identity,
     Index,
     Integer,
@@ -118,3 +119,49 @@ class CheckModel(Base):
         Boolean,
         Computed("COALESCE(status_code BETWEEN 200 AND 399, false)", persisted=True),
     )
+
+
+class IncidentModel(Base):
+    __tablename__ = "incidents"
+    __table_args__ = (
+        # Составные ключи (проверка, монитор): проверка обязана принадлежать тому же
+        # монитору, что и инцидент. `SET NULL (столбец)` (PG 15+) обнуляет только
+        # ссылку на проверку, а monitor_id остаётся: простой SET NULL обнулил бы и его.
+        ForeignKeyConstraint(
+            ["opened_by_check_id", "monitor_id"],
+            ["checks.id", "checks.monitor_id"],
+            name="incidents_opened_by_check_fkey",
+            ondelete="SET NULL (opened_by_check_id)",
+        ),
+        ForeignKeyConstraint(
+            ["resolved_by_check_id", "monitor_id"],
+            ["checks.id", "checks.monitor_id"],
+            name="incidents_resolved_by_check_fkey",
+            ondelete="SET NULL (resolved_by_check_id)",
+        ),
+        # Частичные индексы под внешние ключи: строки без ссылки не индексируются.
+        Index(
+            "incidents_opened_by_check_id_idx",
+            "opened_by_check_id",
+            postgresql_where=text("opened_by_check_id IS NOT NULL"),
+        ),
+        Index(
+            "incidents_resolved_by_check_id_idx",
+            "resolved_by_check_id",
+            postgresql_where=text("resolved_by_check_id IS NOT NULL"),
+        ),
+        # EXCLUDE incidents_no_overlap (gist) здесь не описан: Alembic его не
+        # сравнивает, его создаёт и защищает SQL (см. db/schema.sql).
+    )
+
+    id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
+    monitor_id: Mapped[int] = mapped_column(
+        ForeignKey("monitors.id", ondelete="CASCADE")
+    )
+    started_at: Mapped[datetime]
+    resolved_at: Mapped[datetime | None]
+    failed_checks: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    last_error: Mapped[str | None]
+    opened_by_check_id: Mapped[int | None]
+    resolved_by_check_id: Mapped[int | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -6,6 +6,14 @@ class MonitorNotFoundError(Exception):
         self.monitor_id = monitor_id
 
 
+class IncidentNotFoundError(Exception):
+    """Инцидента с таким id нет в хранилище."""
+
+    def __init__(self, incident_id: int) -> None:
+        super().__init__(f"Инцидент {incident_id} не найден")
+        self.incident_id = incident_id
+
+
 class InvalidMonitorError(Exception):
     """Значения монитора не согласуются между собой (например, таймаут >= интервала).
 

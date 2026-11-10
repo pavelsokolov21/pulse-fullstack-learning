@@ -1,6 +1,8 @@
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import text
 
 from pulse.domain.monitors import Monitor
 from pulse.domain.users import Role, User
@@ -43,3 +45,25 @@ async def make_monitor(
     return await MonitorRepository(session).create(
         owner_id=owner.id, url=url, interval=timedelta(minutes=5), timeout=10.0
     )
+
+
+@pytest.fixture
+def new_incident(session: Session) -> Callable[..., Awaitable[int]]:
+    """Создаёт открытый инцидент монитора и возвращает его id.
+
+    Строка нужна напрямую: репозиторий инциденты пока не создаёт.
+    """
+
+    async def create(monitor: Monitor, failed_checks: int = 3) -> int:
+        incident_id = await session.scalar(
+            text(
+                "INSERT INTO incidents (monitor_id, started_at, failed_checks,"
+                " last_error) VALUES (:monitor, '2026-01-01T00:00:00Z', :failed,"
+                " 'Network Error') RETURNING id"
+            ),
+            {"monitor": monitor.id, "failed": failed_checks},
+        )
+        assert incident_id is not None
+        return incident_id
+
+    return create
