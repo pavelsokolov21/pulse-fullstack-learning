@@ -161,6 +161,8 @@ class IncidentModel(Base):
     started_at: Mapped[datetime]
     resolved_at: Mapped[datetime | None]
     failed_checks: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    # Версия строки для оптимистичной блокировки: +1 при каждой записи счётчика.
+    version: Mapped[int] = mapped_column(Integer, server_default=text("1"))
     last_error: Mapped[str | None]
     opened_by_check_id: Mapped[int | None]
     resolved_by_check_id: Mapped[int | None]

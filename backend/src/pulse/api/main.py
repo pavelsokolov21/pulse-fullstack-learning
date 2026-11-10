@@ -10,6 +10,7 @@ from pulse.api.middlewares.request_id import RequestIdMiddleware
 from pulse.api.openapi import generate_operation_id
 from pulse.api.routers.auth import router as auth_router
 from pulse.api.routers.checks import router as checks_router
+from pulse.api.routers.demo import router as demo_router
 from pulse.api.routers.monitors import router as monitors_router
 from pulse.api.settings import ApiSettings, get_settings
 from pulse.core.passwords import PasswordHasher
@@ -67,6 +68,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(monitors_router)
     app.include_router(checks_router)
+    if not is_prod:
+        # Учебная демонстрация гонок: создаёт временные строки и теряет обновления
+        # намеренно, поэтому в боевом окружении её нет.
+        app.include_router(demo_router)
     return app
 
 

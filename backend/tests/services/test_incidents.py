@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import text
 
-from pulse.domain.errors import IncidentNotFoundError
+from pulse.domain.errors import ConcurrentUpdateError, IncidentNotFoundError
 from pulse.domain.monitors import Monitor
 from pulse.domain.users import Role
 from pulse.repositories.database import Session
@@ -124,3 +124,55 @@ async def test_a_failing_hook_leaves_the_counter_untouched(
         )
 
     assert (await repository.get(incident_id)).failed_checks == 3
+
+
+async def test_optimistic_register_increments_and_bumps_the_version(
+    repository: IncidentRepository, incident_id: int
+) -> None:
+    service = IncidentService(repository)
+
+    assert await service.register_failed_check_optimistic(incident_id) == 4
+
+    incident = await repository.get(incident_id)
+    assert (incident.failed_checks, incident.version) == (4, 2)
+
+
+async def test_optimistic_sequential_calls_do_not_conflict(
+    repository: IncidentRepository, incident_id: int
+) -> None:
+    service = IncidentService(repository)
+
+    for _ in range(3):
+        await service.register_failed_check_optimistic(incident_id)
+
+    incident = await repository.get(incident_id)
+    assert (incident.failed_checks, incident.version) == (6, 4)
+
+
+async def test_optimistic_register_conflicts_when_the_row_changed_after_the_read(
+    session: Session, repository: IncidentRepository, incident_id: int
+) -> None:
+    async def change_behind_our_back() -> None:
+        # Чужая запись между нашим чтением и записью: версия строки уже 2.
+        await session.execute(
+            text(
+                "UPDATE incidents SET failed_checks = 10, version = version + 1"
+                " WHERE id = :i"
+            ),
+            {"i": incident_id},
+        )
+
+    service = IncidentService(repository, before_write=change_behind_our_back)
+
+    with pytest.raises(ConcurrentUpdateError):
+        await service.register_failed_check_optimistic(incident_id)
+
+    # Наш прирост не записан поверх чужого значения.
+    assert (await repository.get(incident_id)).failed_checks == 10
+
+
+async def test_optimistic_register_of_unknown_incident_raises_not_found(
+    repository: IncidentRepository,
+) -> None:
+    with pytest.raises(IncidentNotFoundError):
+        await IncidentService(repository).register_failed_check_optimistic(UNKNOWN_ID)

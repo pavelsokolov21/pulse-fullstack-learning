@@ -148,3 +148,45 @@ def test_missing_url_is_reported_clearly(
 
     with pytest.raises(RuntimeError, match="PULSE_MIGRATE_DATABASE_URL"):
         command.upgrade(config, "head")
+
+
+def test_0002_adds_the_version_column_to_existing_incidents(
+    migrations_db: Database,
+) -> None:
+    config, db = migrations_db
+    command.upgrade(config, "0001")
+    db.execute(
+        "INSERT INTO users (email, password_hash, role)"
+        " VALUES ('o@example.com', 'h', 'manager')"
+    )
+    db.execute(
+        "INSERT INTO monitors (owner_id, url, interval_seconds, timeout_seconds)"
+        " SELECT id, 'https://a.test', 300, 5 FROM users"
+    )
+    db.execute(
+        "INSERT INTO incidents (monitor_id, started_at) SELECT id, now() FROM monitors"
+    )
+
+    command.upgrade(config, "0002")
+
+    # Старые строки получают версию 1; новая строка тоже начинается с 1.
+    row = db.execute("SELECT version FROM incidents").fetchone()
+    assert row is not None
+    assert row[0] == 1
+
+
+def test_0002_downgrade_removes_the_version_column(migrations_db: Database) -> None:
+    config, db = migrations_db
+    command.upgrade(config, "head")
+
+    command.downgrade(config, "0001")
+
+    columns = {
+        str(r[0])
+        for r in db.execute(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name = 'incidents'"
+        ).fetchall()
+    }
+    assert "version" not in columns
+    assert "failed_checks" in columns

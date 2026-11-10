@@ -46,6 +46,7 @@ def test_operation_ids_are_handler_names(schema: dict[str, Any]) -> None:
         "delete_monitor",
         "run_check",
         "list_checks",
+        "run_concurrency_demo",
     }
 
 

@@ -187,3 +187,312 @@ main.wide {
   align-items: center;
   gap: 12px;
 }
+
+/* --- страница «Конкурентность» ----------------------------------------- */
+
+:root {
+  --seg-wait: #d97706;
+  --seg-hold: #2563eb;
+  --seg-commit: #15803d;
+  --seg-text: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --seg-wait: #b45309;
+    --seg-hold: #1d4ed8;
+    --seg-commit: #15803d;
+  }
+}
+
+.lead {
+  max-width: 62ch;
+  margin: 8px 0 16px;
+}
+
+.strategies {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 0 0 12px;
+  border: 0;
+}
+
+.strategies legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.strategy {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.strategy.selected {
+  border-color: var(--accent);
+}
+
+.strategy input {
+  margin-top: 4px;
+}
+
+.strategy span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.strategy code {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.how {
+  max-width: 70ch;
+  margin: 0 0 16px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.field.hold {
+  min-width: 240px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 0;
+  margin: 16px 0 0;
+  font-size: 0.8125rem;
+  list-style: none;
+}
+
+.swatch {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  margin-right: 4px;
+  border-radius: 2px;
+}
+
+.race-result {
+  padding: 16px 0;
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.race-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.race-head h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.verdict {
+  padding: 2px 10px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+}
+
+.verdict-ok {
+  color: var(--seg-commit);
+}
+
+.verdict-bad {
+  color: var(--danger);
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 12px 0;
+}
+
+.facts div {
+  display: flex;
+  flex-direction: column;
+}
+
+.facts dt {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.facts dd.bad {
+  color: var(--danger);
+}
+
+.race-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.race-label {
+  font-size: 0.8125rem;
+}
+
+.race-label small {
+  display: block;
+  color: var(--muted);
+}
+
+.race-axis,
+.race-track {
+  position: relative;
+  height: 28px;
+}
+
+.race-axis {
+  height: 18px;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.race-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.race-axis span:first-child {
+  transform: none;
+}
+
+.race-track {
+  height: 34px;
+  background: color-mix(in srgb, var(--border) 35%, transparent);
+  border-radius: 4px;
+}
+
+.race-grid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.seg {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  overflow: hidden;
+  padding: 0 6px;
+  font-size: 0.6875rem;
+  line-height: 26px;
+  color: var(--seg-text);
+  white-space: nowrap;
+  border-radius: 3px;
+}
+
+.seg-wait {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--seg-wait),
+    var(--seg-wait) 6px,
+    color-mix(in srgb, var(--seg-wait) 70%, transparent) 6px,
+    color-mix(in srgb, var(--seg-wait) 70%, transparent) 12px
+  );
+}
+
+.seg-hold {
+  background: var(--seg-hold);
+}
+
+.seg-commit {
+  background: var(--seg-commit);
+}
+
+.legend .seg-wait,
+.legend .seg-hold,
+.legend .seg-commit {
+  position: static;
+}
+
+.mark-conflict {
+  position: absolute;
+  top: 4px;
+  z-index: 1;
+  width: 18px;
+  margin-left: -9px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 26px;
+  color: var(--danger);
+  text-align: center;
+  background: var(--background);
+  border: 1px solid var(--danger);
+  border-radius: 50%;
+}
+
+.mark-conflict.inline {
+  position: static;
+  display: inline-block;
+  height: 18px;
+  margin: 0 4px 0 0;
+  font-size: 0.6875rem;
+  line-height: 16px;
+  vertical-align: middle;
+}
+
+.race-unit {
+  margin: 4px 0 0 158px;
+  font-size: 0.6875rem;
+}
+
+.race-log {
+  margin-top: 12px;
+  font-size: 0.875rem;
+}
+
+.race-log summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+@media (width <= 640px) {
+  .race-row {
+    grid-template-columns: 1fr;
+  }
+
+  .race-unit {
+    margin-left: 0;
+  }
+}

@@ -153,6 +153,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/demo/concurrency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Concurrency Demo
+         * @description Два параллельных обновления одного счётчика: что произошло и когда.
+         *
+         *     Настоящая гонка на настоящей базе. Только для разработки (в prod ручки нет):
+         *     на время прогона создаётся временный монитор, потом он удаляется.
+         */
+        post: operations["run_concurrency_demo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -181,6 +204,17 @@ export interface components {
              */
             client_secret?: string | null;
         };
+        /** CallResultRead */
+        CallResultRead: {
+            /** Call */
+            call: number;
+            /** Returned */
+            returned: number | null;
+            /** Attempts */
+            attempts: number;
+            /** Error */
+            error: string | null;
+        };
         /**
          * CheckRead
          * @description Проверка монитора в ответе API.
@@ -206,6 +240,38 @@ export interface components {
             /** Ok */
             ok: boolean;
         };
+        /** ConcurrencyRunRead */
+        ConcurrencyRunRead: {
+            strategy: components["schemas"]["Strategy"];
+            /** Hold Ms */
+            hold_ms: number;
+            /** Initial */
+            initial: number;
+            /** Expected */
+            expected: number;
+            /** Final */
+            final: number;
+            /** Final Version */
+            final_version: number;
+            /** Elapsed Ms */
+            elapsed_ms: number;
+            /** Lost Update */
+            lost_update: boolean;
+            /** Events */
+            events: components["schemas"]["TraceEventRead"][];
+            /** Calls */
+            calls: components["schemas"]["CallResultRead"][];
+        };
+        /** ConcurrencyRunRequest */
+        ConcurrencyRunRequest: {
+            strategy: components["schemas"]["Strategy"];
+            /**
+             * Hold Ms
+             * @description Сколько каждый вызов держит строку между чтением и записью
+             * @default 400
+             */
+            hold_ms?: number;
+        };
         /**
          * ErrorResponse
          * @description Единое тело ошибки: код для программы и сообщение для человека.
@@ -216,6 +282,11 @@ export interface components {
             /** Message */
             message: string;
         };
+        /**
+         * EventKind
+         * @enum {string}
+         */
+        EventKind: "start" | "lock_requested" | "read" | "write" | "commit" | "conflict";
         /** FieldError */
         FieldError: {
             /** Loc */
@@ -326,6 +397,12 @@ export interface components {
          */
         Role: "admin" | "manager" | "viewer";
         /**
+         * Strategy
+         * @description Как два параллельных вызова обновляют один счётчик.
+         * @enum {string}
+         */
+        Strategy: "unsafe" | "lock" | "version";
+        /**
          * TokenResponse
          * @description Ответ POST /auth/login по RFC 6749 (OAuth2 password flow).
          */
@@ -340,6 +417,18 @@ export interface components {
             token_type?: "bearer";
             /** Expires In */
             expires_in: number;
+        };
+        /** TraceEventRead */
+        TraceEventRead: {
+            /** Call */
+            call: number;
+            /** Attempt */
+            attempt: number;
+            /** At Ms */
+            at_ms: number;
+            kind: components["schemas"]["EventKind"];
+            /** Value */
+            value: number | null;
         };
         /**
          * UserRead
@@ -939,6 +1028,57 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+        };
+    };
+    run_concurrency_demo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConcurrencyRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConcurrencyRunRead"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -22,6 +22,7 @@ from pulse.repositories.refresh_tokens import RefreshTokenRepository
 from pulse.repositories.users import UserRepository
 from pulse.services.auth import AuthService
 from pulse.services.checks import CheckService
+from pulse.services.concurrency_demo import ConcurrencyDemoService
 from pulse.services.monitors import MonitorService
 from pulse.services.refresh_tokens import RefreshTokenService
 from pulse.services.tokens import TokenService
@@ -74,6 +75,17 @@ async def get_user_repository(session: SessionDep) -> UserRepository:
 
 async def get_refresh_token_repository(session: SessionDep) -> RefreshTokenRepository:
     return RefreshTokenRepository(session)
+
+
+async def get_concurrency_demo_service(request: Request) -> ConcurrencyDemoService:
+    # Своя сессия на каждый вызов демо: берёт фабрику, а не сессию запроса.
+    factory: SessionFactory = request.app.state.session_factory
+    return ConcurrencyDemoService(factory)
+
+
+ConcurrencyDemoServiceDep = Annotated[
+    ConcurrencyDemoService, Depends(get_concurrency_demo_service)
+]
 
 
 async def get_login_rate_limiter(request: Request) -> SlidingWindowRateLimiter:

@@ -14,6 +14,14 @@ class IncidentNotFoundError(Exception):
         self.incident_id = incident_id
 
 
+class ConcurrentUpdateError(Exception):
+    """Строку успели изменить после чтения: запись не выполнена, прочитайте заново."""
+
+    def __init__(self, incident_id: int) -> None:
+        super().__init__(f"Инцидент {incident_id} изменён параллельно")
+        self.incident_id = incident_id
+
+
 class InvalidMonitorError(Exception):
     """Значения монитора не согласуются между собой (например, таймаут >= интервала).
 

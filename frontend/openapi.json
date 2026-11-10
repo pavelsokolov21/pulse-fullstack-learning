@@ -806,6 +806,73 @@
           }
         }
       }
+    },
+    "/demo/concurrency": {
+      "post": {
+        "tags": [
+          "demo"
+        ],
+        "summary": "Run Concurrency Demo",
+        "description": "Два параллельных обновления одного счётчика: что произошло и когда.\n\nНастоящая гонка на настоящей базе. Только для разработки (в prod ручки нет):\nна время прогона создаётся временный монитор, потом он удаляется.",
+        "operationId": "run_concurrency_demo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConcurrencyRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConcurrencyRunRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -868,6 +935,48 @@
           "password"
         ],
         "title": "Body_login"
+      },
+      "CallResultRead": {
+        "properties": {
+          "call": {
+            "type": "integer",
+            "title": "Call"
+          },
+          "returned": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returned"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call",
+          "returned",
+          "attempts",
+          "error"
+        ],
+        "title": "CallResultRead"
       },
       "CheckRead": {
         "properties": {
@@ -933,6 +1042,89 @@
         "title": "CheckRead",
         "description": "Проверка монитора в ответе API."
       },
+      "ConcurrencyRunRead": {
+        "properties": {
+          "strategy": {
+            "$ref": "#/components/schemas/Strategy"
+          },
+          "hold_ms": {
+            "type": "integer",
+            "title": "Hold Ms"
+          },
+          "initial": {
+            "type": "integer",
+            "title": "Initial"
+          },
+          "expected": {
+            "type": "integer",
+            "title": "Expected"
+          },
+          "final": {
+            "type": "integer",
+            "title": "Final"
+          },
+          "final_version": {
+            "type": "integer",
+            "title": "Final Version"
+          },
+          "elapsed_ms": {
+            "type": "number",
+            "title": "Elapsed Ms"
+          },
+          "lost_update": {
+            "type": "boolean",
+            "title": "Lost Update"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TraceEventRead"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "calls": {
+            "items": {
+              "$ref": "#/components/schemas/CallResultRead"
+            },
+            "type": "array",
+            "title": "Calls"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy",
+          "hold_ms",
+          "initial",
+          "expected",
+          "final",
+          "final_version",
+          "elapsed_ms",
+          "lost_update",
+          "events",
+          "calls"
+        ],
+        "title": "ConcurrencyRunRead"
+      },
+      "ConcurrencyRunRequest": {
+        "properties": {
+          "strategy": {
+            "$ref": "#/components/schemas/Strategy"
+          },
+          "hold_ms": {
+            "type": "integer",
+            "maximum": 2000.0,
+            "minimum": 100.0,
+            "title": "Hold Ms",
+            "description": "Сколько каждый вызов держит строку между чтением и записью",
+            "default": 400
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy"
+        ],
+        "title": "ConcurrencyRunRequest"
+      },
       "ErrorResponse": {
         "properties": {
           "code": {
@@ -951,6 +1143,18 @@
         ],
         "title": "ErrorResponse",
         "description": "Единое тело ошибки: код для программы и сообщение для человека."
+      },
+      "EventKind": {
+        "type": "string",
+        "enum": [
+          "start",
+          "lock_requested",
+          "read",
+          "write",
+          "commit",
+          "conflict"
+        ],
+        "title": "EventKind"
       },
       "FieldError": {
         "properties": {
@@ -1203,6 +1407,16 @@
         "title": "Role",
         "description": "Какие действия разрешены (глаголы). С какими объектами, решает владение."
       },
+      "Strategy": {
+        "type": "string",
+        "enum": [
+          "unsafe",
+          "lock",
+          "version"
+        ],
+        "title": "Strategy",
+        "description": "Как два параллельных вызова обновляют один счётчик."
+      },
       "TokenResponse": {
         "properties": {
           "access_token": {
@@ -1227,6 +1441,45 @@
         ],
         "title": "TokenResponse",
         "description": "Ответ POST /auth/login по RFC 6749 (OAuth2 password flow)."
+      },
+      "TraceEventRead": {
+        "properties": {
+          "call": {
+            "type": "integer",
+            "title": "Call"
+          },
+          "attempt": {
+            "type": "integer",
+            "title": "Attempt"
+          },
+          "at_ms": {
+            "type": "number",
+            "title": "At Ms"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EventKind"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call",
+          "attempt",
+          "at_ms",
+          "kind",
+          "value"
+        ],
+        "title": "TraceEventRead"
       },
       "UserRead": {
         "properties": {

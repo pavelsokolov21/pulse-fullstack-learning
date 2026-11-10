@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -110,6 +111,7 @@ export default function MonitorsPage() {
       <div className="header">
         <h1>Мониторы</h1>
         <div className="account">
+          <Link href="/concurrency">Конкурентность</Link>
           {me && (
             <span className="user" title={`id ${me.id}`}>
               {me.email} <span className="badge">{formatRole(me.role)}</span>
