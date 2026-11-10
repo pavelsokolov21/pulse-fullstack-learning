@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from pulse.domain.checks import Check
 from pulse.domain.types import DEFAULT_TIMEOUT, Interval, Timeout, Url
 
 
@@ -46,3 +47,24 @@ class MonitorWithOwner(Monitor):
     """Монитор для списка: вместе с email владельца (в таблице нужен он, а не id)."""
 
     owner_email: str
+
+
+@dataclass(frozen=True)
+class MonitorWithLastCheck(MonitorWithOwner):
+    """Монитор для списка и его последняя проверка (`None`, если проверок ещё нет)."""
+
+    last_check: Check | None
+
+    @classmethod
+    def of(
+        cls, monitor: MonitorWithOwner, last_check: Check | None
+    ) -> "MonitorWithLastCheck":
+        return cls(
+            id=monitor.id,
+            owner_id=monitor.owner_id,
+            url=monitor.url,
+            interval=monitor.interval,
+            timeout=monitor.timeout,
+            owner_email=monitor.owner_email,
+            last_check=last_check,
+        )

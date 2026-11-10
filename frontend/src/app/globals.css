@@ -6,6 +6,7 @@
   --accent: #2563eb;
   --accent-text: #ffffff;
   --danger: #b91c1c;
+  --success: #15803d;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -16,6 +17,7 @@
     --border: #262626;
     --accent: #3b82f6;
     --danger: #f87171;
+    --success: #4ade80;
   }
 }
 
@@ -495,4 +497,29 @@ main.wide {
   .race-unit {
     margin-left: 0;
   }
+}
+
+/* --- последняя проверка в таблице мониторов ---------------------------- */
+
+.last-check {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.875rem;
+}
+
+.last-check .muted {
+  font-size: 0.75rem;
+}
+
+.status {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status.ok {
+  color: var(--success);
+}
+
+.status.bad {
+  color: var(--danger);
 }

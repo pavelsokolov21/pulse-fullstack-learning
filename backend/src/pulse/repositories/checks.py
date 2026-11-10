@@ -1,12 +1,15 @@
+from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import BigInteger, any_, bindparam, delete, select, true
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from pulse.domain.checks import Check
 from pulse.domain.errors import MonitorNotFoundError
 from pulse.repositories.database import Session, constraint_name
-from pulse.repositories.models import CheckModel
+from pulse.repositories.models import CheckModel, MonitorModel
 
 DEFAULT_MAX_CHECKS_PER_MONITOR = 100
 
@@ -83,6 +86,39 @@ class CheckRepository:
             .limit(limit)
         )
         return [_to_domain(c) for c in result]
+
+    async def last_for_monitors(self, monitor_ids: Sequence[int]) -> dict[int, Check]:
+        """Последняя проверка каждого монитора ОДНИМ запросом (без N+1).
+
+        Мониторов без проверок в ответе нет. Форма запроса `JOIN LATERAL ... LIMIT 1`:
+        для каждого монитора из списка база делает один заход в индекс
+        `(monitor_id, checked_at DESC)` и читает ровно одну строку, поэтому стоимость
+        зависит от числа мониторов, а не от числа проверок. `DISTINCT ON` и оконная
+        функция читают ВСЕ проверки этих мониторов и отбрасывают лишнее.
+
+        Порядок такой же, как в `list_recent` (новые первыми, при равном времени
+        больший id), поэтому результаты обоих методов совпадают.
+        """
+        if not monitor_ids:
+            return {}
+        latest = (
+            select(CheckModel)
+            .where(CheckModel.monitor_id == MonitorModel.id)
+            .order_by(CheckModel.checked_at.desc(), CheckModel.id.desc())
+            .limit(1)
+            .lateral("latest")
+        )
+        last = aliased(CheckModel, latest)
+        # `= ANY(массив)`, а не `IN (...)`: текст запроса не зависит от числа id, и
+        # план можно переиспользовать.
+        ids = bindparam("ids", list(monitor_ids), type_=ARRAY(BigInteger))
+        result = await self._session.scalars(
+            select(last)
+            .select_from(MonitorModel)
+            .join(latest, true())
+            .where(MonitorModel.id == any_(ids))
+        )
+        return {c.monitor_id: _to_domain(c) for c in result}
 
     async def release_connection(self) -> None:
         """Завершает текущую транзакцию, возвращая соединение в пул.

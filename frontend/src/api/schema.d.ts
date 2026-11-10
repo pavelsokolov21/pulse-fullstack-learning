@@ -104,7 +104,7 @@ export interface paths {
         };
         /**
          * List Monitors
-         * @description Страница мониторов с email владельца: админу все, остальным свои.
+         * @description Страница мониторов с владельцем и последней проверкой: админу все, иным свои.
          */
         get: operations["list_monitors"];
         put?: never;
@@ -313,7 +313,7 @@ export interface components {
         };
         /**
          * MonitorListItem
-         * @description Строка таблицы мониторов: монитор и email владельца.
+         * @description Строка таблицы мониторов: email владельца и последняя проверка (если была).
          */
         MonitorListItem: {
             /** Id */
@@ -328,6 +328,7 @@ export interface components {
             timeout: number;
             /** Owner Email */
             owner_email: string;
+            last_check: components["schemas"]["CheckRead"] | null;
         };
         /**
          * MonitorPage

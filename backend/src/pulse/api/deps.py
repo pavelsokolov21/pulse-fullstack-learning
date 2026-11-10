@@ -23,6 +23,7 @@ from pulse.repositories.users import UserRepository
 from pulse.services.auth import AuthService
 from pulse.services.checks import CheckService
 from pulse.services.concurrency_demo import ConcurrencyDemoService
+from pulse.services.monitor_overview import MonitorOverviewService
 from pulse.services.monitors import MonitorService
 from pulse.services.refresh_tokens import RefreshTokenService
 from pulse.services.tokens import TokenService
@@ -123,6 +124,17 @@ async def get_monitor_service(monitors: MonitorRepositoryDep) -> MonitorService:
 
 
 MonitorServiceDep = Annotated[MonitorService, Depends(get_monitor_service)]
+
+
+async def get_monitor_overview_service(
+    monitors: MonitorServiceDep, checks: CheckRepositoryDep
+) -> MonitorOverviewService:
+    return MonitorOverviewService(monitors, checks)
+
+
+MonitorOverviewServiceDep = Annotated[
+    MonitorOverviewService, Depends(get_monitor_overview_service)
+]
 
 
 async def get_check_service(

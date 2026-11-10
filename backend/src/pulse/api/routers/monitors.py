@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query, status
 
 from pulse.api.deps import (
     CurrentUserDep,
+    MonitorOverviewServiceDep,
     MonitorServiceDep,
     get_current_user,
     require_writer,
@@ -58,12 +59,12 @@ async def create_monitor(
 
 @router.get("")
 async def list_monitors(
-    service: MonitorServiceDep,
+    service: MonitorOverviewServiceDep,
     user: CurrentUserDep,
     limit: Limit = DEFAULT_LIMIT,
     offset: Offset = 0,
 ) -> MonitorPage:
-    """Страница мониторов с email владельца: админу все, остальным свои."""
+    """Страница мониторов с владельцем и последней проверкой: админу все, иным свои."""
     page = await service.list_page(user, limit=limit, offset=offset)
     return MonitorPage(
         items=[MonitorListItem.model_validate(m) for m in page.items],

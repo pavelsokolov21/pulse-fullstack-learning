@@ -9,6 +9,7 @@ from pydantic import (
     model_validator,
 )
 
+from pulse.api.schemas.checks import CheckRead
 from pulse.domain.monitors import ensure_timeout_fits_interval
 from pulse.domain.types import DEFAULT_TIMEOUT, Interval, Timeout, Url
 
@@ -69,9 +70,10 @@ class MonitorRead(BaseModel):
 
 
 class MonitorListItem(MonitorRead):
-    """Строка таблицы мониторов: монитор и email владельца."""
+    """Строка таблицы мониторов: email владельца и последняя проверка (если была)."""
 
     owner_email: str
+    last_check: CheckRead | None
 
 
 class MonitorPage(BaseModel):

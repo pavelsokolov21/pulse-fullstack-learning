@@ -353,7 +353,7 @@
           "monitors"
         ],
         "summary": "List Monitors",
-        "description": "Страница мониторов с email владельца: админу все, остальным свои.",
+        "description": "Страница мониторов с владельцем и последней проверкой: админу все, иным свои.",
         "operationId": "list_monitors",
         "security": [
           {
@@ -1247,6 +1247,16 @@
           "owner_email": {
             "type": "string",
             "title": "Owner Email"
+          },
+          "last_check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1256,10 +1266,11 @@
           "url",
           "interval",
           "timeout",
-          "owner_email"
+          "owner_email",
+          "last_check"
         ],
         "title": "MonitorListItem",
-        "description": "Строка таблицы мониторов: монитор и email владельца."
+        "description": "Строка таблицы мониторов: email владельца и последняя проверка (если была)."
       },
       "MonitorPage": {
         "properties": {

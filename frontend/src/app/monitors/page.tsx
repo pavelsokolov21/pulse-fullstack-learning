@@ -6,7 +6,12 @@ import { useEffect, useState } from "react";
 
 import { api, auth } from "@/api/client";
 import type { components } from "@/api/schema";
-import { formatInterval, formatRole } from "@/lib/format";
+import {
+  formatAgo,
+  formatInterval,
+  formatLatency,
+  formatRole,
+} from "@/lib/format";
 import {
   PAGE_SIZE,
   clampPage,
@@ -18,12 +23,13 @@ import { useSession } from "@/lib/use-session";
 
 type MonitorPage = components["schemas"]["MonitorPage"];
 type User = components["schemas"]["UserRead"];
+type LastCheck = MonitorPage["items"][number]["last_check"];
 
 // `forPage`: для какой страницы пришёл ответ. Пока он не совпал с выбранной,
 // показываем прежние строки (приглушённо), а не мигаем «Загрузка…».
 type Loaded =
   | { status: "loading" }
-  | { status: "ready"; forPage: number; data: MonitorPage }
+  | { status: "ready"; forPage: number; data: MonitorPage; at: number }
   | { status: "failed"; forPage: number };
 
 export default function MonitorsPage() {
@@ -82,7 +88,7 @@ export default function MonitorsPage() {
           // ближайшую существующую, а не показываем пустую таблицу.
           const existing = clampPage(page, data.total, PAGE_SIZE);
           if (existing !== page) setPage(existing);
-          else setLoaded({ status: "ready", forPage: page, data });
+          else setLoaded({ status: "ready", forPage: page, data, at: Date.now() });
         },
         () => {
           if (!cancelled) setLoaded({ status: "failed", forPage: page });
@@ -132,6 +138,7 @@ export default function MonitorsPage() {
         <MonitorTable
           data={loaded.data}
           page={loaded.forPage}
+          now={new Date(loaded.at)}
           busy={loaded.forPage !== page}
           currentUserId={me?.id}
           onPage={setPage}
@@ -144,12 +151,14 @@ export default function MonitorsPage() {
 function MonitorTable({
   data,
   page,
+  now,
   busy,
   currentUserId,
   onPage,
 }: {
   data: MonitorPage;
   page: number;
+  now: Date;
   busy: boolean;
   currentUserId: number | undefined;
   onPage: (page: number) => void;
@@ -168,6 +177,7 @@ function MonitorTable({
             <th>Владелец</th>
             <th>Интервал</th>
             <th>Таймаут</th>
+            <th>Последняя проверка</th>
           </tr>
         </thead>
         <tbody className={busy ? "busy" : undefined}>
@@ -182,6 +192,9 @@ function MonitorTable({
               </td>
               <td>{formatInterval(monitor.interval)}</td>
               <td>{monitor.timeout} с</td>
+              <td>
+                <LastCheckCell check={monitor.last_check} now={now} />
+              </td>
             </tr>
           ))}
         </tbody>
@@ -211,5 +224,29 @@ function MonitorTable({
         </div>
       </nav>
     </>
+  );
+}
+
+function LastCheckCell({ check, now }: { check: LastCheck; now: Date }) {
+  if (!check) return <span className="muted">Не проверялся</span>;
+
+  // Успех или нет решает база (`ok`); код ответа лишь подпись. Без ответа вовсе
+  // (сеть, таймаут) кода нет, причина лежит в `error`.
+  const label = check.status_code ?? "нет ответа";
+  return (
+    <span className="last-check">
+      <span
+        className={check.ok ? "status ok" : "status bad"}
+        title={check.error ?? `HTTP ${check.status_code}`}
+      >
+        {check.ok ? "✓" : "✕"} {label}
+      </span>
+      <span className="muted">
+        {formatLatency(check.latency_ms)} ·{" "}
+        <time dateTime={check.checked_at} title={check.checked_at}>
+          {formatAgo(check.checked_at, now)}
+        </time>
+      </span>
+    </span>
   );
 }
