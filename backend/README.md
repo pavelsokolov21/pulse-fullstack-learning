@@ -87,10 +87,9 @@ tests/            зеркалит структуру src/pulse/
 
 Запуск API: нужны секрет подписи JWT, адрес базы и адрес Redis (без них приложение не стартует, а Redis проверяется командой PING при запуске). Схему базы сначала нужно создать, см. «Схему БД» ниже. Приложение ходит в базу ролью `pulse_app` (не суперпользователем), пароль тот, что вы передали в `roles.sql`.
 
+Значения лежат в `backend/.env.dev` (он в `.gitignore`, шаблон без секретов: [.env.example](.env.example)). Один раз: `cp .env.example .env.dev` и подставьте свои значения. Дальше запуск одной командой, задача `dev` сама читает файл и добавляет `--no-proxy-headers`:
+
 ```bash
-export PULSE_API_JWT_SECRET=$(openssl rand -hex 32)   # не короче 32 символов
-export PULSE_API_DATABASE_URL='postgresql+psycopg://pulse_app:ПАРОЛЬ@127.0.0.1:5432/pulse_schema'
-export PULSE_API_REDIS_URL='redis://:ПАРОЛЬ_REDIS@127.0.0.1:6379/0'   # REDIS_PASSWORD из .env
 uv run poe dev                                         # http://127.0.0.1:8000/docs
 ```
 
@@ -223,7 +222,7 @@ uv run poe openapi            # то же, в ../frontend/openapi.json
 Фронтенд обращается к API через прокси Next.js (`rewrites`: `/api/*` уходит на FastAPI), поэтому origin один, CORS не нужен, а `SameSite=Strict` не мешает. Cookie с refresh при этом должна ходить на `/api/auth`, и сервер запускают так:
 
 ```bash
-PULSE_API_REFRESH_COOKIE_PATH=/api/auth uv run poe dev
+PULSE_API_REFRESH_COOKIE_PATH=/api/auth uv run poe dev   # уже стоит в .env.dev
 ```
 
 Без этой переменной (путь `/auth`) refresh работает при прямых запросах к API, например из `/docs`.
