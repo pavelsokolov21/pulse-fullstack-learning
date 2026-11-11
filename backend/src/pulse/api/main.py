@@ -12,10 +12,13 @@ from pulse.api.routers.auth import router as auth_router
 from pulse.api.routers.checks import router as checks_router
 from pulse.api.routers.demo import router as demo_router
 from pulse.api.routers.monitors import router as monitors_router
+from pulse.api.routers.reports import router as reports_router
 from pulse.api.settings import ApiSettings, get_settings
 from pulse.core.passwords import PasswordHasher
-from pulse.core.rate_limit import SlidingWindowRateLimiter
 from pulse.repositories.database import create_engine, create_session_factory
+from pulse.repositories.redis_client import create_redis, ping
+from pulse.repositories.redis_rate_limiter import RedisRateLimiter
+from pulse.repositories.report_cache import ReportCache
 
 
 @asynccontextmanager
@@ -28,20 +31,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     engine = create_engine(settings.database_url.get_secret_value())
     app.state.session_factory = create_session_factory(engine)
     app.state.password_hasher = PasswordHasher()
-    app.state.login_rate_limiter = SlidingWindowRateLimiter(
-        settings.login_rate_limit_attempts, settings.login_rate_limit_window_seconds
+    # Один клиент Redis на процесс (внутри пул соединений): им пользуются и кеш
+    # отчётов, и лимитер входа.
+    redis = create_redis(settings.redis_url.get_secret_value())
+    app.state.redis = redis
+    # Лимит общий для всех процессов сервера: счётчики лежат в Redis, а не в памяти.
+    app.state.login_rate_limiter = RedisRateLimiter(
+        redis,
+        settings.login_rate_limit_attempts,
+        settings.login_rate_limit_window_seconds,
+        prefix="pulse:ratelimit:login",
     )
+    app.state.report_cache = ReportCache(redis, settings.report_cache_ttl_seconds)
 
     logger = logging.getLogger("pulse")
     previous_level = logger.level
     logger.setLevel(settings.log_level)
-    # Один клиент на всё приложение: общий пул соединений; закрывается на выходе.
     try:
+        # Падаем при запуске, а не на первом запросе: с неверным паролем или без
+        # Redis приложение не может ни ограничивать вход, ни кешировать.
+        await ping(redis)
+        # Один клиент на всё приложение: общий пул соединений; закрывается на выходе.
         async with create_http_client() as client:
             app.state.http_client = client
             yield
     finally:
         logger.setLevel(previous_level)
+        await redis.aclose()
         await engine.dispose()
 
 
@@ -68,6 +84,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(monitors_router)
     app.include_router(checks_router)
+    app.include_router(reports_router)
     if not is_prod:
         # Учебная демонстрация гонок: создаёт временные строки и теряет обновления
         # намеренно, поэтому в боевом окружении её нет.

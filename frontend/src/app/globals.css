@@ -523,3 +523,104 @@ main.wide {
 .status.bad {
   color: var(--danger);
 }
+
+/* --- отчёт монитора ------------------------------------------------------ */
+
+.segmented {
+  display: inline-flex;
+  gap: 0;
+}
+
+.segmented button {
+  border-radius: 0;
+}
+
+.segmented button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.segmented button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.segmented button + button {
+  margin-left: -1px;
+}
+
+.segmented button.active {
+  position: relative;
+  color: var(--accent-text);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.report-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+  font-size: 0.875rem;
+}
+
+.cache {
+  padding: 1px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+}
+
+.cache-hit {
+  color: var(--success);
+}
+
+.cache-miss {
+  color: var(--muted);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.card dt {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.card dd {
+  margin: 4px 0 0;
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.card dd .muted {
+  font-size: 0.8125rem;
+}
+
+.card.tone-ok dd {
+  color: var(--success);
+}
+
+.card.tone-warn dd {
+  color: #b45309;
+}
+
+.card.tone-bad dd {
+  color: var(--danger);
+}
+
+section.busy {
+  opacity: 0.5;
+}

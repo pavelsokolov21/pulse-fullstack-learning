@@ -22,6 +22,7 @@ from pulse.domain.errors import (
 )
 from pulse.domain.refresh_tokens import RefreshToken
 from pulse.domain.users import User
+from pulse.repositories.audit_log import AuditLogRepository
 from pulse.repositories.database import (
     Session,
     SessionFactory,
@@ -100,7 +101,9 @@ async def rotate_once(
 
 async def create_monitor_once(factory: SessionFactory, actor: User, url: str) -> int:
     async with factory() as session:
-        service = MonitorService(MonitorRepository(session))
+        service = MonitorService(
+            MonitorRepository(session), AuditLogRepository(session)
+        )
         monitor = await service.create(actor, url=url, interval=FIVE_MINUTES, timeout=5)
         await session.commit()
         return monitor.id

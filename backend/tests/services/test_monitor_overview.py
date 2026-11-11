@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from pulse.domain.monitors import Monitor, MonitorWithLastCheck
 from pulse.domain.users import Role, User
+from pulse.repositories.audit_log import AuditLogRepository
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.database import Session
 from pulse.repositories.monitors import MonitorRepository
@@ -38,9 +39,11 @@ def monitors(session: Session) -> MonitorRepository:
 
 @pytest.fixture
 def service(
-    monitors: MonitorRepository, checks: CheckRepository
+    session: Session, monitors: MonitorRepository, checks: CheckRepository
 ) -> MonitorOverviewService:
-    return MonitorOverviewService(MonitorService(monitors), checks)
+    return MonitorOverviewService(
+        MonitorService(monitors, AuditLogRepository(session)), checks
+    )
 
 
 @pytest.fixture
@@ -163,6 +166,7 @@ async def test_query_count_does_not_depend_on_page_size(
 
 
 async def test_result_equals_the_naive_one_query_per_monitor_version(
+    session: Session,
     service: MonitorOverviewService,
     monitors: MonitorRepository,
     checks: CheckRepository,
@@ -174,7 +178,9 @@ async def test_result_equals_the_naive_one_query_per_monitor_version(
 
     fast = await service.list_page(ALICE, limit=100, offset=0)
 
-    page = await MonitorService(monitors).list_page(ALICE, limit=100, offset=0)
+    page = await MonitorService(monitors, AuditLogRepository(session)).list_page(
+        ALICE, limit=100, offset=0
+    )
     naive: list[MonitorWithLastCheck] = []
     for m in page.items:
         recent = await checks.list_recent(m.id, 1)

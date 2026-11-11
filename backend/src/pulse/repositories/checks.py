@@ -1,13 +1,14 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import BigInteger, any_, bindparam, delete, select, true
+from sqlalchemy import BigInteger, any_, bindparam, delete, func, select, true
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from pulse.domain.checks import Check
 from pulse.domain.errors import MonitorNotFoundError
+from pulse.domain.reports import ReportStats
 from pulse.repositories.database import Session, constraint_name
 from pulse.repositories.models import CheckModel, MonitorModel
 
@@ -86,6 +87,37 @@ class CheckRepository:
             .limit(limit)
         )
         return [_to_domain(c) for c in result]
+
+    async def stats(self, monitor_id: int, since: datetime) -> ReportStats:
+        """Итоги монитора с момента `since`: число проверок, успешные, задержки.
+
+        Один проход по индексу `(monitor_id, checked_at DESC)`. Всё считает база
+        (`count`, `avg`, `percentile_cont`), а не Python: тысячи строк по сети ради
+        одного числа были бы дороже самого запроса. Задержки берутся только у
+        проверок с ответом (`status_code IS NOT NULL`).
+        """
+        answered = CheckModel.status_code.is_not(None)
+        row = (
+            await self._session.execute(
+                select(
+                    func.count(),
+                    func.count().filter(CheckModel.ok),
+                    func.avg(CheckModel.latency_ms).filter(answered),
+                    func.percentile_cont(0.95)
+                    .within_group(CheckModel.latency_ms)
+                    .filter(answered),
+                ).where(
+                    CheckModel.monitor_id == monitor_id, CheckModel.checked_at >= since
+                )
+            )
+        ).one()
+        total, ok, avg, p95 = row
+        return ReportStats(
+            total=int(total),
+            ok=int(ok),
+            avg_latency_ms=None if avg is None else float(avg),
+            p95_latency_ms=None if p95 is None else float(p95),
+        )
 
     async def last_for_monitors(self, monitor_ids: Sequence[int]) -> dict[int, Check]:
         """Последняя проверка каждого монитора ОДНИМ запросом (без N+1).

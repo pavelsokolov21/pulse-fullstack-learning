@@ -10,6 +10,7 @@ from pulse.domain.checks import Check
 from pulse.domain.errors import MonitorNotFoundError
 from pulse.domain.monitors import Monitor
 from pulse.domain.users import Role, User
+from pulse.repositories.audit_log import AuditLogRepository
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.database import Session
 from pulse.repositories.monitors import MonitorRepository
@@ -23,6 +24,18 @@ ADMIN = User(3, "admin@example.com", "h", Role.ADMIN)
 
 UNKNOWN_ID = 2_000_000_000
 Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
+
+
+class RecordingInvalidator:
+    """Подмена кеша отчётов: запоминает, ЧТО и В КАКОЙ МОМЕНТ было сброшено."""
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.monitor_ids: list[int] = []
+
+    async def invalidate(self, monitor_id: int) -> None:
+        self.monitor_ids.append(monitor_id)
+        self.events.append("invalidate")
 
 
 class Env:
@@ -42,11 +55,19 @@ class Env:
 
         self.monitors = MonitorRepository(session)
         self.checks = CheckRepository(session)
-        self.monitor_service = MonitorService(self.monitors)
+        self.monitor_service = MonitorService(
+            self.monitors, AuditLogRepository(session)
+        )
+        self.events: list[str] = []
+        self.reports = RecordingInvalidator(self.events)
         self.client = httpx.AsyncClient(transport=httpx.MockTransport(recording))
         self.now = NOW
         self.service = CheckService(
-            self.monitor_service, self.checks, self.client, clock=lambda: self.now
+            self.monitor_service,
+            self.checks,
+            self.client,
+            self.reports,
+            clock=lambda: self.now,
         )
 
     async def add_monitor(
@@ -126,7 +147,10 @@ async def test_run_uses_the_clock_for_checked_at(env: Env) -> None:
 async def test_run_checked_at_is_timezone_aware_by_default(session: Session) -> None:
     environment = Env(ok_handler, session)
     service = CheckService(
-        environment.monitor_service, environment.checks, environment.client
+        environment.monitor_service,
+        environment.checks,
+        environment.client,
+        environment.reports,
     )
     monitor = await environment.add_monitor()
 
@@ -302,3 +326,52 @@ async def test_admin_can_run_and_read_checks_of_any_monitor(env: Env) -> None:
 
     assert check.monitor_id == monitor.id
     assert await env.service.list_recent(ADMIN, monitor.id, 10) == [check]
+
+
+# --- кеш отчётов -----------------------------------------------------------
+
+
+async def test_reports_are_invalidated_for_the_checked_monitor(env: Env) -> None:
+    monitor = await env.add_monitor()
+    other = await env.add_monitor("https://b.test")
+
+    await env.service.run(ALICE, monitor.id)
+
+    assert env.reports.monitor_ids == [monitor.id]
+    assert other.id not in env.reports.monitor_ids
+
+
+async def test_reports_are_invalidated_only_after_the_check_is_committed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Порядок важен: сброс до коммита дал бы читателю, пришедшему между ними, старые
+    # данные из базы под видом свежих. Журнал: коммит перед HTTP-запросом (соединение
+    # возвращается в пул), коммит после записи проверки и только потом сброс кеша.
+    monitor = await env.add_monitor()
+    original = env.checks.release_connection
+
+    async def spy() -> None:
+        env.events.append("commit")
+        await original()
+
+    monkeypatch.setattr(env.checks, "release_connection", spy)
+
+    await env.service.run(ALICE, monitor.id)
+
+    assert env.events == ["commit", "commit", "invalidate"]
+
+
+async def test_reports_are_not_invalidated_when_nothing_was_written(env: Env) -> None:
+    monitor = await env.add_monitor()
+
+    with pytest.raises(MonitorNotFoundError):
+        await env.service.run(BOB, monitor.id)  # чужой монитор: проверки нет
+
+    assert env.events == []
+
+
+async def test_reports_are_not_invalidated_for_a_missing_monitor(env: Env) -> None:
+    with pytest.raises(MonitorNotFoundError):
+        await env.service.run(ALICE, UNKNOWN_ID)
+
+    assert env.events == []

@@ -8,6 +8,11 @@
   `postgresql+psycopg://USER:PASSWORD@127.0.0.1:5432/pulse_test`, либо
 * `POSTGRES_USER`/`POSTGRES_PASSWORD` из корневого `.env` (те же, что у compose).
 
+Redis (кеш отчётов и лимитер входа) берётся оттуда же: `PULSE_TEST_REDIS_URL` или
+`REDIS_PASSWORD` из `.env`. Тесты работают в базе Redis №15 и стирают её целиком
+(`FLUSHDB`), поэтому номер 0 (его использует приложение при обычном запуске)
+запрещён.
+
 Пользователь должен быть суперпользователем (так создан пользователь compose):
 тесты создают базу `pulse_test`, применяют `db/schema.sql` и подключаются
 приложением под ролью `pulse_app`, чтобы права из схемы действовали и в тестах
@@ -23,6 +28,7 @@ from urllib.parse import quote
 
 import psycopg
 import pytest
+import redis
 from alembic import command
 from alembic.config import Config
 from psycopg import sql
@@ -32,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from pulse.domain.users import User
 from pulse.repositories.database import Session, create_engine
+from pulse.repositories.redis_client import RedisClient, create_redis
 
 BACKEND = Path(__file__).parents[1]
 SCHEMA_FILE = BACKEND / "db" / "schema.sql"
@@ -72,10 +79,32 @@ APP_URL = (
     else make_url("postgresql+psycopg://unconfigured:unconfigured@127.0.0.1/pulse_test")
 )
 
+TEST_REDIS_DB = 15
+
+
+def _redis_url() -> str:
+    """Адрес тестовой базы Redis (номер 15) или заглушка, если не настроен."""
+    explicit = os.environ.get("PULSE_TEST_REDIS_URL")
+    if explicit:
+        return explicit
+    password = _read_dotenv(BACKEND.parent / ".env").get("REDIS_PASSWORD")
+    if password:
+        return f"redis://:{quote(password, safe='')}@127.0.0.1:6379/{TEST_REDIS_DB}"
+    return f"redis://:unconfigured@127.0.0.1:6379/{TEST_REDIS_DB}"
+
+
+REDIS_URL = _redis_url()
+if REDIS_URL.rsplit("/", 1)[-1] in ("", "0"):
+    raise pytest.UsageError(
+        "Тестовый Redis не должен быть базой №0: тесты её очищают. "
+        f"Укажите другой номер в PULSE_TEST_REDIS_URL (по умолчанию {TEST_REDIS_DB})."
+    )
+
 # Приложение создаётся уже при импорте `pulse.api.main`, а его настройки требуют
 # секрет JWT и адрес базы. Подключения при импорте нет: адрес только читается.
 os.environ["PULSE_API_JWT_SECRET"] = "test-only-secret-not-for-production-use"
 os.environ["PULSE_API_DATABASE_URL"] = APP_URL.render_as_string(hide_password=False)
+os.environ["PULSE_API_REDIS_URL"] = REDIS_URL
 
 
 def _libpq(url: URL, database: str | None = None) -> str:
@@ -209,6 +238,31 @@ def truncate_all(connection: psycopg.Connection[tuple[object, ...]]) -> None:
         "TRUNCATE users, refresh_tokens, monitors, checks, incidents, channels, "
         "monitor_channels, audit_log RESTART IDENTITY CASCADE"
     )
+
+
+@pytest.fixture
+def clean_redis() -> Iterator[None]:
+    """Стирает тестовую базу Redis до и после теста: ключи не переживают тест.
+
+    Синхронный клиент: фикстура должна работать и в синхронных тестах API.
+    """
+    client = redis.Redis.from_url(REDIS_URL)  # pyright: ignore[reportUnknownMemberType]
+    try:
+        client.flushdb()  # pyright: ignore[reportUnknownMemberType]
+        yield
+        client.flushdb()  # pyright: ignore[reportUnknownMemberType]
+    except redis.RedisError as exc:
+        pytest.fail(f"Redis недоступен ({exc}). Запущен ли `docker compose up -d`?")
+    finally:
+        client.close()
+
+
+@pytest.fixture
+async def redis_client(clean_redis: None) -> AsyncIterator[RedisClient]:
+    """Асинхронный клиент тестового Redis с чистой базой."""
+    client = create_redis(REDIS_URL)
+    yield client
+    await client.aclose()
 
 
 @pytest.fixture

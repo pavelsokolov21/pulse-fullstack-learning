@@ -807,6 +807,83 @@
         }
       }
     },
+    "/monitors/{monitor_id}/report": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Get Monitor Report",
+        "description": "Аптайм и задержки (среднее, p95) монитора за окно.\n\nЗаголовок `X-Cache`: `HIT`, если отчёт отдан из кеша, `MISS`, если посчитан по\nбазе. Новая проверка монитора сбрасывает кеш сразу.",
+        "operationId": "get_monitor_report",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "monitor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Monitor Id"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ReportWindow",
+              "default": "7d"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorReportRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
     "/demo/concurrency": {
       "post": {
         "tags": [
@@ -1338,6 +1415,76 @@
         "title": "MonitorRead",
         "description": "Монитор в ответе API. Данные из хранилища уже валидны: не проверяем снова."
       },
+      "MonitorReportRead": {
+        "properties": {
+          "monitor_id": {
+            "type": "integer",
+            "title": "Monitor Id"
+          },
+          "window": {
+            "$ref": "#/components/schemas/ReportWindow"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "ok": {
+            "type": "integer",
+            "title": "Ok"
+          },
+          "uptime_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uptime Percent"
+          },
+          "avg_latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Latency Ms"
+          },
+          "p95_latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Latency Ms"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "monitor_id",
+          "window",
+          "total",
+          "ok",
+          "uptime_percent",
+          "avg_latency_ms",
+          "p95_latency_ms",
+          "generated_at"
+        ],
+        "title": "MonitorReportRead",
+        "description": "Отчёт монитора за окно. Пустые значения (`null`) означают «нечего считать»."
+      },
       "MonitorUpdate": {
         "properties": {
           "url": {
@@ -1407,6 +1554,16 @@
         ],
         "title": "RegisterRequest",
         "description": "Тело POST /auth/register."
+      },
+      "ReportWindow": {
+        "type": "string",
+        "enum": [
+          "24h",
+          "7d",
+          "30d"
+        ],
+        "title": "ReportWindow",
+        "description": "Окно отчёта: за какой срок считать. Значения это то, что видит клиент API."
       },
       "Role": {
         "type": "string",

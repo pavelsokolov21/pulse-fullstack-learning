@@ -22,7 +22,7 @@ from pulse.api.deps import (
 from pulse.api.main import app, create_app
 from pulse.api.settings import ApiSettings
 from pulse.core.passwords import PasswordHasher
-from pulse.core.rate_limit import SlidingWindowRateLimiter
+from pulse.core.rate_limit import InMemoryRateLimiter, SlidingWindowRateLimiter
 from pulse.domain.users import Role, User
 from pulse.services.refresh_tokens import RefreshTokenService
 from pulse.services.tokens import TokenService
@@ -31,8 +31,9 @@ TEST_EMAIL = "tester@example.com"
 
 
 @pytest.fixture(autouse=True)
-def _clean_database(clean_database: None) -> None:
-    """В каждом тесте API база пуста, а нумерация id начинается с 1."""
+def _clean_database(clean_database: None, clean_redis: None) -> None:
+    """В каждом тесте API база пуста, нумерация id начинается с 1, а в Redis нет
+    чужих счётчиков лимита и кеша."""
 
 
 async def current_test_user(session: SessionDep) -> User:
@@ -121,7 +122,7 @@ def auth_app(clock: FakeClock) -> FastAPI:
     )
     # Лимит входа щедрый: тесты входят десятки раз с одного адреса. Тесты самого
     # ограничения собирают приложение с узким лимитом (см. test_rate_limit.py).
-    limiter = SlidingWindowRateLimiter(10_000, 60)
+    limiter = InMemoryRateLimiter(SlidingWindowRateLimiter(10_000, 60))
 
     async def refresh_service(
         repository: RefreshTokenRepositoryDep,

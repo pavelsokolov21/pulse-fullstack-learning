@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from pulse.repositories.checks import DEFAULT_MAX_CHECKS_PER_MONITOR
 from pulse.repositories.database import ASYNC_URL_PREFIX
+from pulse.repositories.redis_client import REDIS_URL_PREFIXES
 
 # Хост и порт сюда не входят: их принимает запускающий процесс
 # (`fastapi dev --host --port`, `uvicorn --host --port`), приложение их не читает.
@@ -41,6 +42,20 @@ class ApiSettings(BaseSettings):
             "postgresql+psycopg://пользователь:пароль@хост:порт/база. Содержит пароль"
         ),
     )
+    redis_url: SecretStr = Field(
+        description=(
+            "Адрес Redis: redis://:пароль@хост:порт/номер_базы. Содержит пароль. "
+            "Нужен для кеша отчётов и лимита попыток входа"
+        ),
+    )
+    report_cache_ttl_seconds: int = Field(
+        default=60,
+        ge=1,
+        description=(
+            "Сколько живёт кеш отчёта монитора. Новая проверка сбрасывает его сразу, "
+            "TTL нужен для окна, которое сдвигается со временем, и как страховка"
+        ),
+    )
     jwt_secret: SecretStr = Field(
         min_length=32,
         description="Ключ подписи JWT (HS256), не короче 32 символов",
@@ -74,6 +89,13 @@ class ApiSettings(BaseSettings):
         # в текст ошибки не попадает.
         if not value.get_secret_value().startswith(ASYNC_URL_PREFIX):
             raise ValueError(f"адрес должен начинаться с {ASYNC_URL_PREFIX}")
+        return value
+
+    @field_validator("redis_url")
+    @classmethod
+    def _redis_scheme(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().startswith(REDIS_URL_PREFIXES):
+            raise ValueError("адрес должен начинаться с redis:// или rediss://")
         return value
 
     @field_validator("log_level", mode="before")

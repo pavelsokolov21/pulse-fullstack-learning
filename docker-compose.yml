@@ -20,5 +20,30 @@ services:
       timeout: 3s
       retries: 10
 
+  redis:
+    image: redis:8-alpine
+    # Пароль обязателен: Redis без него отвечает любому, кто достучится до порта.
+    # `:?` останавливает compose с понятной ошибкой, если REDIS_PASSWORD не задан в .env.
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?задайте REDIS_PASSWORD в .env}
+    # Кеш и счётчики лимитера не нужно переживать перезапуск: диск отключён
+    # (--save "" и --appendonly no). Память ограничена, а при нехватке вытесняются
+    # только ключи с TTL (volatile-lru): все наши ключи его имеют.
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server --requirepass "$$REDIS_PASSWORD" --save ""
+        --appendonly no --maxmemory 128mb --maxmemory-policy volatile-lru
+    ports:
+      - "127.0.0.1:6379:6379" # только localhost, как и Postgres
+    healthcheck:
+      # REDISCLI_AUTH передаёт пароль клиенту без флага -a (он светился бы в ps и
+      # предупреждении redis-cli).
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   pgdata:

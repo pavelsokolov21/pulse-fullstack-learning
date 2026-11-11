@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from pulse.domain.monitors import MonitorWithLastCheck
 from pulse.domain.users import Role, User
+from pulse.repositories.audit_log import AuditLogRepository
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.database import (
     Session,
@@ -73,9 +74,9 @@ class SelectCounter:
 async def naive(session: Session, limit: int) -> list[MonitorWithLastCheck]:
     """1 + N: по запросу на последнюю проверку каждого монитора."""
     checks = CheckRepository(session)
-    page = await MonitorService(MonitorRepository(session)).list_page(
-        BENCH_ACTOR, limit=limit, offset=0
-    )
+    page = await MonitorService(
+        MonitorRepository(session), AuditLogRepository(session)
+    ).list_page(BENCH_ACTOR, limit=limit, offset=0)
     result: list[MonitorWithLastCheck] = []
     for monitor in page.items:
         recent = await checks.list_recent(monitor.id, 1)
@@ -86,7 +87,8 @@ async def naive(session: Session, limit: int) -> list[MonitorWithLastCheck]:
 async def batched(session: Session, limit: int) -> list[MonitorWithLastCheck]:
     """Один запрос за проверками на всю страницу."""
     service = MonitorOverviewService(
-        MonitorService(MonitorRepository(session)), CheckRepository(session)
+        MonitorService(MonitorRepository(session), AuditLogRepository(session)),
+        CheckRepository(session),
     )
     return (await service.list_page(BENCH_ACTOR, limit=limit, offset=0)).items
 

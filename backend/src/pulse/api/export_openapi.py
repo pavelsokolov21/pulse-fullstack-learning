@@ -15,6 +15,7 @@ from typing import Any
 PLACEHOLDER_SECRET = "openapi-export-placeholder-not-a-real-secret"
 # Подключения к базе при построении схемы нет: адрес нужен только настройкам.
 PLACEHOLDER_DATABASE_URL = "postgresql+psycopg://placeholder@localhost/placeholder"
+PLACEHOLDER_REDIS_URL = "redis://localhost:6379/0"
 
 
 def build_schema() -> dict[str, Any]:
@@ -22,6 +23,7 @@ def build_schema() -> dict[str, Any]:
     # заглушка ставится до импорта, и сам импорт отложен до этого места.
     os.environ.setdefault("PULSE_API_JWT_SECRET", PLACEHOLDER_SECRET)
     os.environ.setdefault("PULSE_API_DATABASE_URL", PLACEHOLDER_DATABASE_URL)
+    os.environ.setdefault("PULSE_API_REDIS_URL", PLACEHOLDER_REDIS_URL)
     from pulse.api.main import create_app
 
     return create_app().openapi()

@@ -10,6 +10,7 @@ Next.js (App Router) поверх API из `../backend`. Типы и клиен�
 # backend/
 PULSE_API_JWT_SECRET=$(openssl rand -hex 32) PULSE_API_REFRESH_COOKIE_PATH=/api/auth \
   PULSE_API_DATABASE_URL='postgresql+psycopg://pulse_app:ПАРОЛЬ@127.0.0.1:5432/pulse_schema' \
+  PULSE_API_REDIS_URL='redis://:ПАРОЛЬ_REDIS@127.0.0.1:6379/0' \
   uv run fastapi dev --no-proxy-headers
 
 # frontend/

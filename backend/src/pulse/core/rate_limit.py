@@ -3,6 +3,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from math import ceil
+from typing import Protocol
 
 type MonotonicClock = Callable[[], float]
 
@@ -71,3 +72,25 @@ class SlidingWindowRateLimiter:
             self._drop_expired(window, now)
             if not window:
                 del self._hits[key]
+
+
+class RateLimiter(Protocol):
+    """Ограничитель частоты, каким его видит API: асинхронный, чтобы можно было
+    подставить и локальный (в памяти процесса), и общий (Redis)."""
+
+    async def hit(self, key: str) -> RateLimitResult: ...
+
+
+class InMemoryRateLimiter:
+    """Локальный ограничитель в интерфейсе `RateLimiter`.
+
+    Счётчики живут в памяти одного процесса: при нескольких процессах сервера у
+    каждого свои, и реальный лимит получается в N раз выше. Для общего лимита нужен
+    Redis (`pulse.repositories.redis_rate_limiter`).
+    """
+
+    def __init__(self, limiter: SlidingWindowRateLimiter) -> None:
+        self._limiter = limiter
+
+    async def hit(self, key: str) -> RateLimitResult:
+        return self._limiter.hit(key)

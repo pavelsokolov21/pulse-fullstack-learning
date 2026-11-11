@@ -58,7 +58,7 @@ uv run poe check    # ruff + pyright (strict) + pytest
 
 ### Тесты и база
 
-Тесты репозиториев, сервисов и API идут в настоящий PostgreSQL: ограничения схемы, права ролей и гонки нельзя проверить на подделке. Нужен запущенный сервер (`docker compose up -d db`) и корневой `.env` (`cp .env.example .env`): из него тесты берут логин и пароль суперпользователя. Иначе задайте `PULSE_TEST_DATABASE_URL=postgresql+psycopg://ЛОГИН:ПАРОЛЬ@127.0.0.1:5432/pulse_test`.
+Тесты репозиториев, сервисов и API идут в настоящий PostgreSQL: ограничения схемы, права ролей и гонки нельзя проверить на подделке. Нужны запущенные PostgreSQL и Redis (`docker compose up -d`) и корневой `.env` (`cp .env.example .env`): из него тесты берут логин и пароль суперпользователя и пароль Redis. Иначе задайте `PULSE_TEST_DATABASE_URL=postgresql+psycopg://ЛОГИН:ПАРОЛЬ@127.0.0.1:5432/pulse_test` и `PULSE_TEST_REDIS_URL=redis://:ПАРОЛЬ@127.0.0.1:6379/15`. Redis-тесты работают в базе №15 и стирают её (`FLUSHDB`): номер 0 запрещён.
 
 Что делают тесты сами: создают базу `pulse_test` (имя обязано кончаться на `_test`, в ней стирают данные), применяют миграции Alembic (`alembic upgrade head`, как в бою) и пересоздают схему, когда изменился `schema.sql` или файл миграции. Приложение в тестах подключается ролью `pulse_app`, поэтому права из схемы действуют и там (например, `UPDATE checks` запрещён).
 
@@ -85,11 +85,12 @@ src/pulse/
 tests/            зеркалит структуру src/pulse/
 ```
 
-Запуск API: нужны секрет подписи JWT и адрес базы (без них приложение не стартует). Схему базы сначала нужно создать, см. «Схему БД» ниже. Приложение ходит в базу ролью `pulse_app` (не суперпользователем), пароль тот, что вы передали в `roles.sql`.
+Запуск API: нужны секрет подписи JWT, адрес базы и адрес Redis (без них приложение не стартует, а Redis проверяется командой PING при запуске). Схему базы сначала нужно создать, см. «Схему БД» ниже. Приложение ходит в базу ролью `pulse_app` (не суперпользователем), пароль тот, что вы передали в `roles.sql`.
 
 ```bash
 export PULSE_API_JWT_SECRET=$(openssl rand -hex 32)   # не короче 32 символов
 export PULSE_API_DATABASE_URL='postgresql+psycopg://pulse_app:ПАРОЛЬ@127.0.0.1:5432/pulse_schema'
+export PULSE_API_REDIS_URL='redis://:ПАРОЛЬ_REDIS@127.0.0.1:6379/0'   # REDIS_PASSWORD из .env
 uv run poe dev                                         # http://127.0.0.1:8000/docs
 ```
 
@@ -242,6 +243,8 @@ PULSE_API_REFRESH_COOKIE_PATH=/api/auth uv run poe dev
 | `PULSE_API_LOG_LEVEL`             | `INFO`       | уровень логов `pulse.*`: DEBUG, INFO, WARNING, ERROR, CRITICAL |
 | `PULSE_API_MAX_CHECKS_PER_MONITOR` | `100`       | сколько последних проверок хранить на монитор (>= 1)    |
 | `PULSE_API_DATABASE_URL`          | обязательно  | адрес PostgreSQL ролью `pulse_app`: `postgresql+psycopg://логин:пароль@хост:порт/база` (содержит пароль, в репозиторий не кладите) |
+| `PULSE_API_REDIS_URL`             | обязательно  | адрес Redis: `redis://:пароль@хост:порт/номер_базы` (содержит пароль). Кеш отчётов и лимит входа |
+| `PULSE_API_REPORT_CACHE_TTL_SECONDS` | `60`      | сколько живёт кеш отчёта монитора; новая проверка сбрасывает его сразу |
 | `PULSE_API_JWT_SECRET`            | обязательно  | ключ подписи JWT (HS256), не короче 32 символов         |
 | `PULSE_API_ACCESS_TOKEN_TTL_MINUTES` | `15`      | срок жизни access-токена, минуты (>= 1)                 |
 | `PULSE_API_REFRESH_TOKEN_TTL_DAYS` | `7`         | срок жизни refresh-токена, дни (>= 1)                   |
@@ -250,3 +253,11 @@ PULSE_API_REFRESH_COOKIE_PATH=/api/auth uv run poe dev
 | `PULSE_API_REFRESH_COOKIE_PATH`   | `/auth`      | путь cookie с refresh-токеном; за прокси Next.js нужен `/api/auth` |
 
 В `prod` схема `/openapi.json` остаётся доступной (по ней строится клиент фронтенда).
+
+## Redis: кеш отчёта, лимит входа
+
+Redis поднимается в `docker-compose.yml` (порт только на `127.0.0.1`, пароль обязателен, диск отключён: кеш и счётчики не нужно переживать перезапуск). Пароль `REDIS_PASSWORD` задаётся в корневом `.env` (образец в `.env.example`); без него `docker compose` не стартует. Один асинхронный клиент `redis.asyncio` создаётся на процесс в `lifespan` и закрывается при остановке.
+
+- **Отчёт монитора** `GET /monitors/{id}/report?window=24h|7d|30d`: аптайм, среднее и p95 задержки (по проверкам с ответом). Cache-aside: промах считает по базе и кладёт в Redis на TTL, попадание базу за отчётом не трогает. Заголовок `X-Cache: HIT|MISS`. Новая проверка монитора сбрасывает кеш (счётчик версий монитора поднимается после коммита), так что отчёт сразу после проверки не устаревший. Права проверяются раньше кеша. Если Redis недоступен, отчёт считается по базе: кеш это оптимизация, а не источник данных. Замер: `uv run python db/bench_report_cache.py`.
+- **Лимит входа** `RedisRateLimiter`: скользящее окно на sorted set, проверка и запись одним Lua-скриптом (неделимо), время берёт сам Redis. Лимит общий для всех процессов сервера. При недоступном Redis запросы пропускаются (fail open) с записью в лог.
+- **Журнал аудита** `audit_log`: `monitor.create`, `monitor.update`, `monitor.delete` пишутся в одной транзакции с изменением (та же сессия, один коммит), с `request_id` запроса. У приложения нет `UPDATE` и `DELETE` на эту таблицу.

@@ -10,6 +10,7 @@ from pulse.domain.errors import (
 )
 from pulse.domain.monitors import Monitor, MonitorWithOwner
 from pulse.domain.users import Role, User
+from pulse.repositories.audit_log import AuditLogRepository
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.database import Session
 from pulse.repositories.monitors import MonitorRepository
@@ -42,8 +43,8 @@ def check_repository(session: Session) -> CheckRepository:
 
 
 @pytest.fixture
-def service(repository: MonitorRepository) -> MonitorService:
-    return MonitorService(repository)
+def service(repository: MonitorRepository, session: Session) -> MonitorService:
+    return MonitorService(repository, AuditLogRepository(session))
 
 
 def plain(monitor: MonitorWithOwner) -> Monitor:

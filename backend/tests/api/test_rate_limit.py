@@ -9,7 +9,7 @@ from pulse.api.deps import get_login_rate_limiter, get_password_hasher
 from pulse.api.main import create_app
 from pulse.api.settings import ApiSettings
 from pulse.core.passwords import PasswordHasher
-from pulse.core.rate_limit import SlidingWindowRateLimiter
+from pulse.core.rate_limit import InMemoryRateLimiter, SlidingWindowRateLimiter
 
 PASSWORD = "correct horse battery"
 ATTEMPTS = 3
@@ -58,7 +58,12 @@ def counting(auth_app: FastAPI) -> CountingHasher:
 def limited_client(
     auth_app: FastAPI, tick: MonotonicClock, counting: CountingHasher
 ) -> Iterator[TestClient]:
-    limiter = SlidingWindowRateLimiter(ATTEMPTS, WINDOW, clock=tick)
+    # Управляемые часы нужны этим тестам, поэтому здесь локальный лимитер. Настоящий
+    # Redis-лимитер проверяют `test_default_limit_comes_from_settings` ниже и
+    # tests/repositories/test_redis_rate_limiter.py.
+    limiter = InMemoryRateLimiter(
+        SlidingWindowRateLimiter(ATTEMPTS, WINDOW, clock=tick)
+    )
     auth_app.dependency_overrides[get_login_rate_limiter] = lambda: limiter
     with TestClient(auth_app) as client:
         client.post(

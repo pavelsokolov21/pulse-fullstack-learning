@@ -13,6 +13,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -32,6 +33,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -167,3 +169,42 @@ class IncidentModel(Base):
     opened_by_check_id: Mapped[int | None]
     resolved_by_check_id: Mapped[int | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class AuditLogModel(Base):
+    """Журнал аудита: только дописывается (у приложения нет UPDATE и DELETE)."""
+
+    __tablename__ = "audit_log"
+    __table_args__ = (
+        # Под вопрос «что делал пользователь»; записи без пользователя не индексируются.
+        Index(
+            "audit_log_actor_id_occurred_at_idx",
+            "actor_id",
+            text("occurred_at DESC"),
+            postgresql_where=text("actor_id IS NOT NULL"),
+        ),
+        # Под вопрос «что происходило с этим объектом».
+        Index(
+            "audit_log_entity_idx",
+            "entity_type",
+            "entity_id",
+            text("occurred_at DESC"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # SET NULL: журнал переживает удаление пользователя.
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    action: Mapped[str]
+    entity_type: Mapped[str]
+    # Без внешнего ключа намеренно: запись ссылается на объекты разных таблиц, и
+    # журнал должен жить дольше удалённого объекта.
+    entity_id: Mapped[int | None]
+    details: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )
+    request_id: Mapped[str | None]
+    ip: Mapped[str | None] = mapped_column(INET)

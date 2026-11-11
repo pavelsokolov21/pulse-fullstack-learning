@@ -8,17 +8,19 @@ from fastapi.security import OAuth2PasswordBearer
 
 from pulse.api.settings import ApiSettings
 from pulse.core.passwords import PasswordHasher
-from pulse.core.rate_limit import SlidingWindowRateLimiter
+from pulse.core.rate_limit import RateLimiter
 from pulse.domain.errors import (
     MissingTokenError,
     PermissionDeniedError,
     RateLimitExceededError,
 )
 from pulse.domain.users import Role, User
+from pulse.repositories.audit_log import AuditLogRepository
 from pulse.repositories.checks import CheckRepository
 from pulse.repositories.database import Session, SessionFactory
 from pulse.repositories.monitors import MonitorRepository
 from pulse.repositories.refresh_tokens import RefreshTokenRepository
+from pulse.repositories.report_cache import ReportCache
 from pulse.repositories.users import UserRepository
 from pulse.services.auth import AuthService
 from pulse.services.checks import CheckService
@@ -26,6 +28,7 @@ from pulse.services.concurrency_demo import ConcurrencyDemoService
 from pulse.services.monitor_overview import MonitorOverviewService
 from pulse.services.monitors import MonitorService
 from pulse.services.refresh_tokens import RefreshTokenService
+from pulse.services.reports import ReportService
 from pulse.services.tokens import TokenService
 
 # Зависимости `async def`: синхронную FastAPI выполнил бы в пуле потоков, а здесь
@@ -89,8 +92,19 @@ ConcurrencyDemoServiceDep = Annotated[
 ]
 
 
-async def get_login_rate_limiter(request: Request) -> SlidingWindowRateLimiter:
-    limiter: SlidingWindowRateLimiter = request.app.state.login_rate_limiter
+async def get_audit_log_repository(session: SessionDep) -> AuditLogRepository:
+    # Та же сессия, что у репозитория монитора: запись журнала и изменение это одна
+    # транзакция.
+    return AuditLogRepository(session)
+
+
+async def get_report_cache(request: Request) -> ReportCache:
+    cache: ReportCache = request.app.state.report_cache
+    return cache
+
+
+async def get_login_rate_limiter(request: Request) -> RateLimiter:
+    limiter: RateLimiter = request.app.state.login_rate_limiter
     return limiter
 
 
@@ -110,17 +124,19 @@ UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
 RefreshTokenRepositoryDep = Annotated[
     RefreshTokenRepository, Depends(get_refresh_token_repository)
 ]
-LoginRateLimiterDep = Annotated[
-    SlidingWindowRateLimiter, Depends(get_login_rate_limiter)
-]
+AuditLogRepositoryDep = Annotated[AuditLogRepository, Depends(get_audit_log_repository)]
+ReportCacheDep = Annotated[ReportCache, Depends(get_report_cache)]
+LoginRateLimiterDep = Annotated[RateLimiter, Depends(get_login_rate_limiter)]
 PasswordHasherDep = Annotated[PasswordHasher, Depends(get_password_hasher)]
 HttpClientDep = Annotated[httpx.AsyncClient, Depends(get_http_client)]
 
 
-async def get_monitor_service(monitors: MonitorRepositoryDep) -> MonitorService:
+async def get_monitor_service(
+    monitors: MonitorRepositoryDep, audit: AuditLogRepositoryDep
+) -> MonitorService:
     # Сервис без собственного состояния: дёшево собирать на каждый запрос, а
     # репозитории (сессия базы) приходят снаружи и подменяются отдельно.
-    return MonitorService(monitors)
+    return MonitorService(monitors, audit)
 
 
 MonitorServiceDep = Annotated[MonitorService, Depends(get_monitor_service)]
@@ -141,9 +157,19 @@ async def get_check_service(
     monitors: MonitorServiceDep,
     checks: CheckRepositoryDep,
     client: HttpClientDep,
+    cache: ReportCacheDep,
 ) -> CheckService:
     # Проверки спрашивают права у MonitorService: правило владения в одном месте.
-    return CheckService(monitors, checks, client)
+    return CheckService(monitors, checks, client, cache)
+
+
+async def get_report_service(
+    monitors: MonitorServiceDep, checks: CheckRepositoryDep, cache: ReportCacheDep
+) -> ReportService:
+    return ReportService(monitors, checks, cache)
+
+
+ReportServiceDep = Annotated[ReportService, Depends(get_report_service)]
 
 
 async def get_token_service(settings: SettingsDep) -> TokenService:
@@ -224,6 +250,6 @@ async def enforce_login_rate_limit(
     # подделывается, и доверять ему в приложении нельзя. Особенность прокси Next.js
     # (он заголовок не ставит, а пропускает) описан в README.
     key = request.client.host if request.client else "unknown"
-    result = limiter.hit(key)
+    result = await limiter.hit(key)
     if not result.allowed:
         raise RateLimitExceededError(result.retry_after)

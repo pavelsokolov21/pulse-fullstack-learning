@@ -18,6 +18,7 @@ PROTECTED: list[tuple[str, str, dict[str, Any] | None]] = [
     ("DELETE", "/monitors/1", None),
     ("POST", "/monitors/1/checks", None),
     ("GET", "/monitors/1/checks", None),
+    ("GET", "/monitors/1/report", None),
     ("GET", "/auth/me", None),
 ]
 IDS = [f"{method} {path}" for method, path, _ in PROTECTED]
@@ -126,7 +127,7 @@ def test_openapi_marks_every_monitor_and_check_route_as_secured(
         if not auth_app.openapi()["paths"][path][method].get("security")
     ]
 
-    assert len(operations) == 7
+    assert len(operations) == 8
     assert unsecured == []
 
 

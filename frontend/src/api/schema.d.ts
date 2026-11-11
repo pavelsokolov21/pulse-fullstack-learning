@@ -153,6 +153,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/monitors/{monitor_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Monitor Report
+         * @description Аптайм и задержки (среднее, p95) монитора за окно.
+         *
+         *     Заголовок `X-Cache`: `HIT`, если отчёт отдан из кеша, `MISS`, если посчитан по
+         *     базе. Новая проверка монитора сбрасывает кеш сразу.
+         */
+        get: operations["get_monitor_report"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/demo/concurrency": {
         parameters: {
             query?: never;
@@ -361,6 +384,30 @@ export interface components {
             timeout: number;
         };
         /**
+         * MonitorReportRead
+         * @description Отчёт монитора за окно. Пустые значения (`null`) означают «нечего считать».
+         */
+        MonitorReportRead: {
+            /** Monitor Id */
+            monitor_id: number;
+            window: components["schemas"]["ReportWindow"];
+            /** Total */
+            total: number;
+            /** Ok */
+            ok: number;
+            /** Uptime Percent */
+            uptime_percent: number | null;
+            /** Avg Latency Ms */
+            avg_latency_ms: number | null;
+            /** P95 Latency Ms */
+            p95_latency_ms: number | null;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+        };
+        /**
          * MonitorUpdate
          * @description Тело PATCH /monitors/{id}: меняются только переданные поля.
          *
@@ -391,6 +438,12 @@ export interface components {
              */
             password: string;
         };
+        /**
+         * ReportWindow
+         * @description Окно отчёта: за какой срок считать. Значения это то, что видит клиент API.
+         * @enum {string}
+         */
+        ReportWindow: "24h" | "7d" | "30d";
         /**
          * Role
          * @description Какие действия разрешены (глаголы). С какими объектами, решает владение.
@@ -1020,6 +1073,57 @@ export interface operations {
             };
             /** @description Forbidden */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+        };
+    };
+    get_monitor_report: {
+        parameters: {
+            query?: {
+                window?: components["schemas"]["ReportWindow"];
+            };
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorReportRead"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

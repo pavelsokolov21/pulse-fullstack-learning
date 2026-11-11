@@ -183,7 +183,9 @@ function MonitorTable({
         <tbody className={busy ? "busy" : undefined}>
           {data.items.map((monitor) => (
             <tr key={monitor.id}>
-              <td className="url">{monitor.url}</td>
+              <td className="url">
+                <Link href={`/monitors/${monitor.id}`}>{monitor.url}</Link>
+              </td>
               <td>
                 {monitor.owner_email}
                 {monitor.owner_id === currentUserId && (
