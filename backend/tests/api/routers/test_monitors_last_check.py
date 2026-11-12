@@ -27,7 +27,7 @@ def add_check(
     db: Db, monitor_id: int, checked_at: str, status: int | None = 200
 ) -> int:
     row = db.execute(
-        "INSERT INTO checks (monitor_id, url, status_code, latency_ms, error,"
+        "INSERT INTO checks (monitor_id, url, status_code, duration_ms, error,"
         " checked_at) VALUES (%s, 'https://a.test', %s, 12.5, %s, %s) RETURNING id",
         (
             monitor_id,

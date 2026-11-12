@@ -80,7 +80,7 @@ WITH shares AS (
            END AS status
     FROM points
 )
-INSERT INTO checks (monitor_id, url, status_code, latency_ms, error, checked_at)
+INSERT INTO checks (monitor_id, url, status_code, duration_ms, error, checked_at)
 SELECT id, url, status,
        CASE WHEN status IS NULL
             THEN timeout_seconds * 1000 * (0.5 + 0.5 * r_latency)

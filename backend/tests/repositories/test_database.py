@@ -23,14 +23,14 @@ async def test_application_role_cannot_update_checks(
 ) -> None:
     await session.execute(
         text(
-            "INSERT INTO checks (monitor_id, url, latency_ms, checked_at, status_code)"
+            "INSERT INTO checks (monitor_id, url, duration_ms, checked_at, status_code)"
             " VALUES (:m, 'https://a.test', 1, now(), 200)"
         ),
         {"m": monitor.id},
     )
 
     with pytest.raises(ProgrammingError, match="permission denied"):
-        await session.execute(update(CheckModel).values(latency_ms=0))
+        await session.execute(update(CheckModel).values(duration_ms=0))
 
 
 async def test_application_role_cannot_touch_the_audit_log(session: Session) -> None:

@@ -127,6 +127,8 @@ docker compose exec -T db psql -U pulse -d pulse_schema -v ON_ERROR_STOP=1 < db/
 
 Схему меняют только миграции; приложение их не запускает. Выполняет их роль `pulse_migrator` (владелец таблиц), поэтому адрес берётся из отдельной переменной `PULSE_MIGRATE_DATABASE_URL` (в нём пароль, в репозиторий не кладите). Файлы: [alembic.ini](alembic.ini), [migrations/env.py](migrations/env.py), [migrations/versions/](migrations/versions/).
 
+Адрес можно положить в `backend/.env.migrate` (строка `PULSE_MIGRATE_DATABASE_URL=...`, файл в `.gitignore`, приложение его не читает). Тогда `uv run poe migrate` применяет всё без экспорта переменной, а `uv run poe check-migrations` прогоняет проверку «пустая база → `upgrade head` → `alembic check` → откат и накат» на временной базе.
+
 ```bash
 export PULSE_MIGRATE_DATABASE_URL='postgresql+psycopg://pulse_migrator:ПАРОЛЬ@127.0.0.1:5432/pulse_schema'
 uv run alembic upgrade head              # применить всё
@@ -145,6 +147,53 @@ uv run alembic check                     # модели и база совпад
 - **Не описаны моделями** `incidents`, `channels`, `monitor_channels`, `audit_log`: приложение их пока не использует, автогенерация их игнорирует (`include_object` в `env.py`). Добавите модель, и они попадут под сравнение.
 - **Базовая миграция** `0001` применяет `db/schema.sql` как есть, потому что в нём комментарии о каждом решении и вещи, которые автогенерация не умеет: `EXCLUDE`, `GENERATED`, `GRANT`, составные ключи с `ON DELETE SET NULL (столбец)`. Файл после выпуска миграции не правят.
 - **Откат** `0001` удаляет таблицы, но не расширение `btree_gist` и не роли: они общие.
+
+### Миграции на живых данных (неделя 7)
+
+Опыты идут на копии `pulse_lab` (1M+ строк в `checks`), рабочая `pulse_schema` не трогается. Всё лежит в [db/lab/](db/lab/):
+
+```bash
+db/lab/lab.sh reset                        # pulse_lab = CREATE DATABASE ... TEMPLATE pulse_schema (секунды)
+db/lab/lab.sh psql db/lab/02_not_null_safe.sql
+export PULSE_LAB_URL='postgresql://pulse_app:ПАРОЛЬ@127.0.0.1:5432/pulse_lab'
+uv run python db/lab/loader.py --rate 200  # нагрузчик: INSERT + чтение последних проверок, раз в секунду max задержки
+uv run python db/lab/lock_demo.py          # очередь блокировок в pg_stat_activity и pg_locks
+```
+
+Без нагрузчика блокировку не видно: он печатает по секундам максимум задержки, и «застрявшая» секунда видна сразу. Базовая линия: 190 циклов/с, медиана 1.5 мс, максимум до 20 мс.
+
+**Миграции** (все нагрузочно проверены на копии, у каждой есть `downgrade`, тесты в [tests/migrations/test_live_data_migrations.py](tests/migrations/test_live_data_migrations.py)):
+
+| Ревизия | Что | Приём |
+| --- | --- | --- |
+| 0003 | `checks.region text NOT NULL` | `ADD COLUMN ... DEFAULT 'eu'` (мгновенно) → `CHECK ... NOT VALID` → `VALIDATE CONSTRAINT` → `SET NOT NULL` → снять CHECK |
+| 0004 | индекс `checks(checked_at)` | `CREATE INDEX CONCURRENTLY` в `autocommit_block` |
+| 0005-0007 | `latency_ms` → `duration_ms` | expand (колонка + триггер-синхронизация) → migrate (батчи по 10 тыс., коммит после каждой) → contract (NOT NULL, снять триггер и старую колонку) |
+
+**Замеры** (PostgreSQL 18, 1 000 060 строк, таблица 99 МБ, всё в кеше; цифры как есть, без округления в пользу вывода):
+
+| Что | Время | Что видел нагрузчик |
+| --- | --- | --- |
+| `ADD COLUMN ... DEFAULT 'eu'` (константа) | 0.35-0.9 мс | ничего |
+| `ADD COLUMN ... DEFAULT clock_timestamp()` (волатильный) | 1417 мс, таблица переписана | под ACCESS EXCLUSIVE, не гонялся с нагрузчиком, откатил |
+| `SET NOT NULL` в лоб | 62 мс под ACCESS EXCLUSIVE, сервер пишет `verifying table "checks"` | max 54.6 мс против 5-8 в норме |
+| `NOT VALID` → `VALIDATE` → `SET NOT NULL` | 0.7 мс + 48.5 мс (SHARE UPDATE EXCLUSIVE) + скан пропущен | max 7.8 мс, без всплесков |
+| `CREATE INDEX` обычный | 204 мс, на это время INSERT стоят | max вставки 187 мс (4 запроса > 100 мс), чтение не страдает |
+| `CREATE INDEX CONCURRENTLY` | 321 мс (в 1.6 раза дольше) | max вставки 15.9 мс, без всплесков |
+| Бэкфилл `duration_ms`, батчи по 10 тыс. | 22.8 с на 1 млн строк, оба вида кода пишут параллельно | p99 вставки 16 мс (в норме 6), один всплеск 216 мс; ошибок и несовпадений 0 |
+| `downgrade` шага 0007 (копия обратно) | 21.6 с | данные совпали, 0 расхождений |
+
+Очередь блокировок ([db/lab/lock_demo.py](db/lab/lock_demo.py)): сессия A держит открытую транзакцию с чтением `checks` (ACCESS SHARE), миграция B ждёт ACCESS EXCLUSIVE, а обычный SELECT приложения C встаёт **за B**, хотя A ему не мешает. Без `lock_timeout` нагрузчик замер на 3.0 с, с `lock_timeout = 1s` миграция упала с ошибкой через 1.01 с и остановка составила 1.0 с.
+
+**Индекс по `checked_at`, `EXPLAIN (ANALYZE, BUFFERS)`, кеш прогрет:**
+
+| Запрос | Было (индекс `monitor_id, checked_at`) | Полный скан (индексы запрещены) | Стало (+ `checked_at`) |
+| --- | --- | --- | --- |
+| последний час, 7 строк | 0.366 мс, 410 буферов | 41.9 мс, 12 605 | **0.050 мс, 7 буферов** |
+| час посреди данных, 1347 строк | 0.611 мс, 522 | 40.4 мс | 0.701 мс, 531 (планировщик остался на старом индексе) |
+| сутки, агрегат, 32 455 строк | 4.04 мс, 1178 | 42.0 мс | 3.68 мс, 630 |
+
+Вывод: в PostgreSQL 18 составной индекс `(monitor_id, checked_at)` уже работает как *skip scan* по `monitor_id` (всего 132 значения), поэтому «долг недели 4» здесь проявляется мягче, чем на PG 17 и ниже. Новый индекс заметно выигрывает на самом частом запросе («последний час»: в 7 раз по времени, в 60 раз по буферам), на остальных почти нейтрален, стоит 21 МБ (+20% к индексам таблицы). Выгода растёт с числом мониторов: цена skip scan пропорциональна числу различных `monitor_id`, а здесь их 132 (эту зависимость я не измерял).
 
 ### Тестовые данные (Faker)
 

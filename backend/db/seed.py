@@ -235,7 +235,7 @@ def load(cur: Cursor, data: SeedData) -> None:
                 Column("monitor_id", "bigint"),
                 Column("url", "text"),
                 Column("status_code", "smallint"),
-                Column("latency_ms", "double precision"),
+                Column("duration_ms", "double precision"),
                 Column("error", "text"),
                 Column("checked_at", "timestamptz"),
             ],

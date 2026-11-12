@@ -104,6 +104,9 @@ class CheckModel(Base):
         Index(
             "checks_monitor_id_checked_at_idx", "monitor_id", text("checked_at DESC")
         ),
+        # Запросы по времени без монитора («проверки за последний час»). Создан
+        # миграцией 0004 через CONCURRENTLY.
+        Index("checks_checked_at_idx", "checked_at"),
     )
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
@@ -112,9 +115,14 @@ class CheckModel(Base):
     )
     url: Mapped[str]
     status_code: Mapped[int | None] = mapped_column(SmallInteger)
-    latency_ms: Mapped[float] = mapped_column(Double)
+    # Было latency_ms: переименовано за три миграции (0005-0007, expand / migrate /
+    # contract). Домен и API по-прежнему называют поле latency_ms.
+    duration_ms: Mapped[float] = mapped_column(Double)
     error: Mapped[str | None]
     checked_at: Mapped[datetime]
+    # Регион, откуда сделана проверка. Колонка добавлена миграцией 0003 на живой
+    # таблице: DEFAULT + CHECK NOT VALID + VALIDATE + SET NOT NULL.
+    region: Mapped[str] = mapped_column(server_default="eu")
     # Правило «успех = ответ 200..399» считает база (GENERATED ... STORED), поэтому
     # оно не может разойтись со status_code. Для приложения столбец только читается.
     ok: Mapped[bool] = mapped_column(

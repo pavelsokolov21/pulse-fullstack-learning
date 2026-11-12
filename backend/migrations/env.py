@@ -56,6 +56,9 @@ def run_migrations_offline() -> None:
         include_object=include_object,
         compare_type=True,
         compare_server_default=True,
+        # Каждая миграция в своей транзакции. Иначе `upgrade head` с несколькими
+        # ревизиями держит блокировки первой миграции, пока не закончится последняя.
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -68,6 +71,9 @@ def do_run_migrations(connection: Connection) -> None:
         include_object=include_object,
         compare_type=True,
         compare_server_default=True,
+        # Каждая миграция в своей транзакции. Иначе `upgrade head` с несколькими
+        # ревизиями держит блокировки первой миграции, пока не закончится последняя.
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()

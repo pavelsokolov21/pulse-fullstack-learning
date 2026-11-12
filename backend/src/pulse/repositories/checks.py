@@ -21,7 +21,7 @@ def _to_domain(model: CheckModel) -> Check:
         monitor_id=model.monitor_id,
         url=model.url,
         status_code=model.status_code,
-        latency_ms=model.latency_ms,
+        latency_ms=model.duration_ms,
         error=model.error,
         checked_at=model.checked_at,
         ok=model.ok,
@@ -63,7 +63,7 @@ class CheckRepository:
             monitor_id=monitor_id,
             url=url,
             status_code=status_code,
-            latency_ms=latency_ms,
+            duration_ms=latency_ms,
             error=error,
             checked_at=checked_at,
         )
@@ -102,9 +102,9 @@ class CheckRepository:
                 select(
                     func.count(),
                     func.count().filter(CheckModel.ok),
-                    func.avg(CheckModel.latency_ms).filter(answered),
+                    func.avg(CheckModel.duration_ms).filter(answered),
                     func.percentile_cont(0.95)
-                    .within_group(CheckModel.latency_ms)
+                    .within_group(CheckModel.duration_ms)
                     .filter(answered),
                 ).where(
                     CheckModel.monitor_id == monitor_id, CheckModel.checked_at >= since

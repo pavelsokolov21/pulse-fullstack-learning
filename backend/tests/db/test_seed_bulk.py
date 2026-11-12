@@ -190,7 +190,7 @@ def test_latency_is_plausible(admin_db: Db) -> None:
 
     median = scalar(
         admin_db,
-        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms)"
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)"
         " FROM checks WHERE status_code = 200",
     )
     assert 30 < median < 100
@@ -199,7 +199,7 @@ def test_latency_is_plausible(admin_db: Db) -> None:
 def test_same_seed_gives_the_same_data(admin_db: Db) -> None:
     add_monitors(admin_db, 60, 300)
     summary = (
-        "SELECT count(*), sum(latency_ms), count(*) FILTER (WHERE ok),"
+        "SELECT count(*), sum(duration_ms), count(*) FILTER (WHERE ok),"
         " min(checked_at) FROM checks"
     )
 
@@ -213,7 +213,7 @@ def test_same_seed_gives_the_same_data(admin_db: Db) -> None:
 
 def test_different_seeds_give_different_data(admin_db: Db) -> None:
     add_monitors(admin_db, 60)
-    summary = "SELECT sum(latency_ms) FROM checks"
+    summary = "SELECT sum(duration_ms) FROM checks"
 
     fill(cursor(admin_db), target=2000, seed=1, now=NOW)
     first = scalar(admin_db, summary)

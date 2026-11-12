@@ -47,10 +47,19 @@ test = "pytest"
 watch = "ptw . --now"
 check = ["lint", "types", "test"]
 openapi = "python -m pulse.api.export_openapi ../frontend/openapi.json"
-migrate = "alembic upgrade head"
 
-# Секреты берутся из .env.dev (в .gitignore, шаблон в .env.example). envfile стоит
-# на самой задаче, а не глобально: иначе его значения попали бы в pytest.
+# Миграции идут ролью-владельцем схемы: её адрес в .env.migrate (в .gitignore).
+# envfile стоит на самой задаче, а не глобально: иначе его значения попали бы в pytest.
+[tool.poe.tasks.migrate]
+cmd = "alembic upgrade head"
+envfile = ".env.migrate"
+
+# Пустая база -> upgrade head -> alembic check -> откат и накат. Перед коммитом
+# миграции; в CI переедет как есть.
+[tool.poe.tasks.check-migrations]
+cmd = "bash db/check_migrations.sh"
+
+# Секреты берутся из .env.dev (в .gitignore, шаблон в .env.example).
 # --no-proxy-headers: иначе клиент подменой X-Forwarded-For обходит лимит входа.
 [tool.poe.tasks.dev]
 cmd = "fastapi dev --no-proxy-headers"
