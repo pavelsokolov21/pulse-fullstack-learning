@@ -105,6 +105,9 @@ if REDIS_URL.rsplit("/", 1)[-1] in ("", "0"):
 os.environ["PULSE_API_JWT_SECRET"] = "test-only-secret-not-for-production-use"
 os.environ["PULSE_API_DATABASE_URL"] = APP_URL.render_as_string(hide_password=False)
 os.environ["PULSE_API_REDIS_URL"] = REDIS_URL
+# Воркер читает свои настройки при импорте `pulse.tasks.worker`.
+os.environ["PULSE_WORKER_BROKER_URL"] = REDIS_URL
+os.environ["PULSE_WORKER_DATABASE_URL"] = APP_URL.render_as_string(hide_password=False)
 
 
 def _libpq(url: URL, database: str | None = None) -> str:

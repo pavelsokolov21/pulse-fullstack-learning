@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, status
 from pulse.api.deps import (
     CheckServiceDep,
     CurrentUserDep,
+    TaskProducerDep,
     get_current_user,
     require_writer,
 )
@@ -37,9 +38,17 @@ Limit = Annotated[int, Query(ge=1, le=MAX_LIMIT)]
     responses={status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}},
 )
 async def run_check(
-    monitor_id: int, service: CheckServiceDep, user: CurrentUserDep
+    monitor_id: int,
+    service: CheckServiceDep,
+    user: CurrentUserDep,
+    tasks: TaskProducerDep,
 ) -> CheckRead:
-    return CheckRead.model_validate(await service.run(user, monitor_id))
+    check = await service.run(user, monitor_id)
+    if not check.ok:
+        # Проверка уже в базе (сервис закоммитил её), поэтому воркер её найдёт.
+        # Отправка уведомления ответа не задерживает: в очередь уходит только id.
+        await tasks.notify_check_failed(check.id)
+    return CheckRead.model_validate(check)
 
 
 @router.get("")

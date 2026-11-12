@@ -13,12 +13,17 @@ from pulse.api.routers.checks import router as checks_router
 from pulse.api.routers.demo import router as demo_router
 from pulse.api.routers.monitors import router as monitors_router
 from pulse.api.routers.reports import router as reports_router
+from pulse.api.routers.tasks import router as tasks_router
 from pulse.api.settings import ApiSettings, get_settings
 from pulse.core.passwords import PasswordHasher
 from pulse.repositories.database import create_engine, create_session_factory
-from pulse.repositories.redis_client import create_redis, ping
+from pulse.repositories.redis_client import RedisClient, create_redis, ping
 from pulse.repositories.redis_rate_limiter import RedisRateLimiter
 from pulse.repositories.report_cache import ReportCache
+from pulse.repositories.task_journal import RedisTaskJournal
+from pulse.tasks.app import create_celery_app
+from pulse.tasks.journal import NullTaskJournal, TaskJournal
+from pulse.tasks.producer import CeleryTaskProducer, NullTaskProducer, TaskProducer
 
 
 @asynccontextmanager
@@ -43,6 +48,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         prefix="pulse:ratelimit:login",
     )
     app.state.report_cache = ReportCache(redis, settings.report_cache_ttl_seconds)
+    # Очередь фоновых задач. Не настроена: заглушка, API работает без воркера.
+    producer: TaskProducer = NullTaskProducer()
+    journal: TaskJournal = NullTaskJournal()
+    tasks_redis: RedisClient | None = None
+    if settings.tasks_broker_url is not None:
+        broker_url = settings.tasks_broker_url.get_secret_value()
+        # Журнал задач лежит в той же базе Redis, что и очередь: туда же пишет воркер.
+        tasks_redis = create_redis(broker_url)
+        journal = RedisTaskJournal(tasks_redis)
+        producer = CeleryTaskProducer(create_celery_app(broker_url), journal)
+    app.state.task_producer = producer
+    app.state.task_journal = journal
 
     logger = logging.getLogger("pulse")
     previous_level = logger.level
@@ -57,6 +74,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             yield
     finally:
         logger.setLevel(previous_level)
+        if isinstance(producer, CeleryTaskProducer):
+            producer.close()
+        if tasks_redis is not None:
+            await tasks_redis.aclose()
         await redis.aclose()
         await engine.dispose()
 
@@ -85,6 +106,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(monitors_router)
     app.include_router(checks_router)
     app.include_router(reports_router)
+    app.include_router(tasks_router)
     if not is_prod:
         # Учебная демонстрация гонок: создаёт временные строки и теряет обновления
         # намеренно, поэтому в боевом окружении её нет.

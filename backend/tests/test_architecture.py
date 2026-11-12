@@ -12,14 +12,16 @@ import pytest
 SRC = Path(__file__).parents[1] / "src" / "pulse"
 
 # Слой -> пакеты pulse, от которых ему зависеть нельзя.
+# `tasks` (Celery) внешний слой, как `api`: он вызывает сервисы, а они его не знают.
 FORBIDDEN: dict[str, set[str]] = {
-    "core": {"api", "services", "repositories", "domain", "checks", "cli"},
-    "domain": {"api", "services", "repositories", "checks", "cli"},
-    "repositories": {"api", "services", "checks", "cli"},
-    "services": {"api", "cli"},
-    "checks": {"api", "services", "repositories", "cli"},
+    "core": {"api", "services", "repositories", "domain", "checks", "cli", "tasks"},
+    "domain": {"api", "services", "repositories", "checks", "cli", "tasks"},
+    "repositories": {"api", "services", "checks", "cli", "tasks"},
+    "services": {"api", "cli", "tasks"},
+    "checks": {"api", "services", "repositories", "cli", "tasks"},
     "api": {"cli"},
-    "cli": {"api", "services", "repositories"},
+    "cli": {"api", "services", "repositories", "tasks"},
+    "tasks": {"api", "cli"},
 }
 
 
@@ -110,3 +112,24 @@ def test_fastapi_is_only_used_in_api_layer() -> None:
     ]
 
     assert outside == []
+
+
+def test_celery_is_only_used_in_tasks_layer() -> None:
+    # Сервисы не знают про Celery: их логику проверяют без брокера и воркера.
+    outside = [
+        str(path.relative_to(SRC))
+        for path in sorted(SRC.rglob("*.py"))
+        if path.relative_to(SRC).parts[0] != "tasks"
+        and any(m.split(".")[0] in {"celery", "kombu"} for m in imported_modules(path))
+    ]
+
+    assert outside == []
+
+
+def test_every_lower_layer_forbids_depending_on_tasks() -> None:
+    # Сейчас ни один нижний слой не импортирует `tasks`, поэтому проверка выше
+    # зелёная и без запрета. Запрет должен быть записан явно, иначе первый же
+    # импорт сервисом задачи Celery пройдёт молча.
+    lower = {"core", "domain", "repositories", "services", "checks", "cli"}
+
+    assert {layer for layer in lower if "tasks" not in FORBIDDEN[layer]} == set()

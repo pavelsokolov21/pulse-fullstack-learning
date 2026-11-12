@@ -624,3 +624,140 @@ main.wide {
 section.busy {
   opacity: 0.5;
 }
+
+/* --- страница «Фоновые задачи» ------------------------------------------ */
+
+:root {
+  --tone-neutral: #6b7280;
+  --tone-active: #2563eb;
+  --tone-warn: #b45309;
+  --tone-ok: #15803d;
+  --tone-bad: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tone-neutral: #9ca3af;
+    --tone-active: #60a5fa;
+    --tone-warn: #fbbf24;
+    --tone-ok: #4ade80;
+    --tone-bad: #f87171;
+  }
+}
+
+select {
+  padding: 8px 10px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.run-summary {
+  margin: 0 0 16px;
+}
+
+.lanes {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  margin: 16px 0 0;
+  list-style: none;
+}
+
+.lane {
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.lane-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+}
+
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 1px 10px;
+  font-size: 0.8125rem;
+  color: var(--tone, var(--foreground));
+  white-space: nowrap;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+}
+
+.tone-neutral {
+  --tone: var(--tone-neutral);
+}
+
+.tone-active {
+  --tone: var(--tone-active);
+}
+
+.tone-warn {
+  --tone: var(--tone-warn);
+}
+
+.tone-ok {
+  --tone: var(--tone-ok);
+}
+
+.tone-bad {
+  --tone: var(--tone-bad);
+}
+
+.swatch.tone-neutral,
+.swatch.tone-active,
+.swatch.tone-warn,
+.swatch.tone-ok,
+.swatch.tone-bad {
+  background: var(--tone);
+}
+
+.countdown {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.countdown-bar {
+  flex: 1;
+  max-width: 320px;
+  height: 6px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.countdown-bar span {
+  display: block;
+  height: 100%;
+  background: var(--tone-warn);
+}
+
+.lane-reason {
+  margin: 8px 0 0;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}

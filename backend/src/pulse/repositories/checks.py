@@ -8,7 +8,7 @@ from sqlalchemy.orm import aliased
 
 from pulse.domain.checks import Check
 from pulse.domain.errors import MonitorNotFoundError
-from pulse.domain.reports import ReportStats
+from pulse.domain.reports import MonitorUptime, ReportStats
 from pulse.repositories.database import Session, constraint_name
 from pulse.repositories.models import CheckModel, MonitorModel
 
@@ -77,6 +77,27 @@ class CheckRepository:
         check = _to_domain(model)
         await self._trim(monitor_id)
         return check
+
+    async def get(self, check_id: int) -> Check | None:
+        """Проверка по id или `None`: её могли удалить чисткой старых записей."""
+        model = await self._session.get(CheckModel, check_id)
+        return None if model is None else _to_domain(model)
+
+    async def uptime_by_monitor(self, since: datetime) -> list[MonitorUptime]:
+        """Сколько проверок и сколько успешных у каждого монитора с момента `since`.
+
+        Один запрос на все мониторы вместо запроса на каждый (N+1). Идёт по индексу
+        `checks_checked_at_idx`: условие только по времени, без монитора.
+        """
+        rows = await self._session.execute(
+            select(
+                CheckModel.monitor_id, func.count(), func.count().filter(CheckModel.ok)
+            )
+            .where(CheckModel.checked_at >= since)
+            .group_by(CheckModel.monitor_id)
+            .order_by(CheckModel.monitor_id)
+        )
+        return [MonitorUptime(monitor_id, total, ok) for monitor_id, total, ok in rows]
 
     async def list_recent(self, monitor_id: int, limit: int) -> list[Check]:
         """До `limit` последних проверок монитора, новые первыми."""

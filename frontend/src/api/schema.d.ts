@@ -176,6 +176,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Task Events
+         * @description Последние события фоновых задач, новые первыми.
+         *
+         *     Журнал общий для всех пользователей и хранит только номера проверок и
+         *     причины сбоев, поэтому читать его могут те же роли, что запускают проверки.
+         */
+        get: operations["list_task_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/demo/concurrency": {
         parameters: {
             query?: never;
@@ -456,6 +479,32 @@ export interface components {
          * @enum {string}
          */
         Strategy: "unsafe" | "lock" | "version";
+        /**
+         * TaskEventRead
+         * @description Событие фоновой задачи «уведомить о сбое» для страницы с задачами.
+         */
+        TaskEventRead: {
+            /** Check Id */
+            check_id: number;
+            state: components["schemas"]["TaskState"];
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number | null;
+            /** Detail */
+            detail: string | null;
+            /** Retry In */
+            retry_in: number | null;
+        };
+        /**
+         * TaskState
+         * @description Шаг жизни задачи «уведомить о сбое» для журнала и страницы с задачами.
+         * @enum {string}
+         */
+        TaskState: "queued" | "started" | "retry" | "sent" | "duplicate" | "skipped" | "failed";
         /**
          * TokenResponse
          * @description Ответ POST /auth/login по RFC 6749 (OAuth2 password flow).
@@ -1133,6 +1182,55 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+        };
+    };
+    list_task_events: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskEventRead"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

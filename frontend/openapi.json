@@ -884,6 +884,81 @@
         }
       }
     },
+    "/tasks/events": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "List Task Events",
+        "description": "Последние события фоновых задач, новые первыми.\n\nЖурнал общий для всех пользователей и хранит только номера проверок и\nпричины сбоев, поэтому читать его могут те же роли, что запускают проверки.",
+        "operationId": "list_task_events",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 300,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskEventRead"
+                  },
+                  "title": "Response List Task Events"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
     "/demo/concurrency": {
       "post": {
         "tags": [
@@ -1584,6 +1659,80 @@
         ],
         "title": "Strategy",
         "description": "Как два параллельных вызова обновляют один счётчик."
+      },
+      "TaskEventRead": {
+        "properties": {
+          "check_id": {
+            "type": "integer",
+            "title": "Check Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "retry_in": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "check_id",
+          "state",
+          "at",
+          "attempt",
+          "detail",
+          "retry_in"
+        ],
+        "title": "TaskEventRead",
+        "description": "Событие фоновой задачи «уведомить о сбое» для страницы с задачами."
+      },
+      "TaskState": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "started",
+          "retry",
+          "sent",
+          "duplicate",
+          "skipped",
+          "failed"
+        ],
+        "title": "TaskState",
+        "description": "Шаг жизни задачи «уведомить о сбое» для журнала и страницы с задачами."
       },
       "TokenResponse": {
         "properties": {

@@ -30,6 +30,8 @@ from pulse.services.monitors import MonitorService
 from pulse.services.refresh_tokens import RefreshTokenService
 from pulse.services.reports import ReportService
 from pulse.services.tokens import TokenService
+from pulse.tasks.journal import TaskJournal
+from pulse.tasks.producer import TaskProducer
 
 # Зависимости `async def`: синхронную FastAPI выполнил бы в пуле потоков, а здесь
 # нужно только вернуть ссылку.
@@ -161,6 +163,22 @@ async def get_check_service(
 ) -> CheckService:
     # Проверки спрашивают права у MonitorService: правило владения в одном месте.
     return CheckService(monitors, checks, client, cache)
+
+
+def get_task_producer(request: Request) -> TaskProducer:
+    producer: TaskProducer = request.app.state.task_producer
+    return producer
+
+
+TaskProducerDep = Annotated[TaskProducer, Depends(get_task_producer)]
+
+
+def get_task_journal(request: Request) -> TaskJournal:
+    journal: TaskJournal = request.app.state.task_journal
+    return journal
+
+
+TaskJournalDep = Annotated[TaskJournal, Depends(get_task_journal)]
 
 
 async def get_report_service(

@@ -356,3 +356,18 @@ def test_refresh_cookie_path_is_read_from_environment(
 def test_refresh_cookie_path_must_be_absolute(value: str) -> None:
     with pytest.raises(ValidationError, match="refresh_cookie_path"):
         settings_with(refresh_cookie_path=value)
+
+
+def test_tasks_broker_is_optional() -> None:
+    assert settings_with().tasks_broker_url is None
+
+
+def test_tasks_broker_must_be_redis() -> None:
+    with pytest.raises(ValidationError, match="redis://"):
+        settings_with(tasks_broker_url="amqp://guest@localhost//")
+
+
+def test_tasks_broker_secret_is_not_printed() -> None:
+    text = repr(settings_with(tasks_broker_url="redis://:SECRET@127.0.0.1:6379/1"))
+
+    assert "SECRET" not in text

@@ -117,6 +117,7 @@ export default function MonitorsPage() {
       <div className="header">
         <h1>Мониторы</h1>
         <div className="account">
+          <Link href="/tasks">Фоновые задачи</Link>
           <Link href="/concurrency">Конкурентность</Link>
           {me && (
             <span className="user" title={`id ${me.id}`}>

@@ -56,6 +56,14 @@ class ApiSettings(BaseSettings):
             "TTL нужен для окна, которое сдвигается со временем, и как страховка"
         ),
     )
+    tasks_broker_url: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Адрес Redis-брокера Celery: redis://:пароль@хост:порт/номер_базы (как у "
+            "воркера, PULSE_WORKER_BROKER_URL). Не задан: фоновые задачи не ставятся, "
+            "уведомления о сбоях проверок не уходят"
+        ),
+    )
     jwt_secret: SecretStr = Field(
         min_length=32,
         description="Ключ подписи JWT (HS256), не короче 32 символов",
@@ -95,6 +103,15 @@ class ApiSettings(BaseSettings):
     @classmethod
     def _redis_scheme(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().startswith(REDIS_URL_PREFIXES):
+            raise ValueError("адрес должен начинаться с redis:// или rediss://")
+        return value
+
+    @field_validator("tasks_broker_url")
+    @classmethod
+    def _broker_scheme(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not value.get_secret_value().startswith(
+            REDIS_URL_PREFIXES
+        ):
             raise ValueError("адрес должен начинаться с redis:// или rediss://")
         return value
 

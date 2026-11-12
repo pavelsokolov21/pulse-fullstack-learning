@@ -52,3 +52,42 @@ class MonitorReport:
 class ReportResult:
     report: MonitorReport
     cached: bool  # True: отдан из кеша, базу за отчётом не спрашивали
+
+
+@dataclass(frozen=True)
+class MonitorUptime:
+    """Проверки одного монитора за период: сколько всего и сколько успешных."""
+
+    monitor_id: int
+    total: int
+    ok: int
+
+
+@dataclass(frozen=True)
+class DigestLine:
+    monitor_id: int
+    url: str
+    total: int
+    ok: int
+
+    @property
+    def uptime_percent(self) -> float:
+        return round(self.ok / self.total * 100, 3)
+
+
+@dataclass(frozen=True)
+class DailyDigest:
+    """Ночная сводка по всем мониторам за сутки.
+
+    `worst`: мониторы с самым низким аптаймом (только те, у кого были проверки).
+    """
+
+    since: datetime
+    monitors: int
+    total: int
+    ok: int
+    worst: list[DigestLine]
+
+    @property
+    def uptime_percent(self) -> float | None:
+        return round(self.ok / self.total * 100, 3) if self.total else None

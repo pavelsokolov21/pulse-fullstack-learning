@@ -20,6 +20,7 @@ PROTECTED: list[tuple[str, str, dict[str, Any] | None]] = [
     ("GET", "/monitors/1/checks", None),
     ("GET", "/monitors/1/report", None),
     ("GET", "/auth/me", None),
+    ("GET", "/tasks/events", None),
 ]
 IDS = [f"{method} {path}" for method, path, _ in PROTECTED]
 

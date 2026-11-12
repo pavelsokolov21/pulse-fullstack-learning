@@ -80,6 +80,8 @@ WRITE_OPERATIONS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("PATCH", "/monitors/1", {"timeout": 5}),
     ("DELETE", "/monitors/1", None),
     ("POST", "/monitors/1/checks", None),
+    # Журнал задач общий для всех: наблюдателю он закрыт.
+    ("GET", "/tasks/events", None),
 ]
 READ_OPERATIONS: list[tuple[str, str]] = [
     ("GET", "/monitors"),
