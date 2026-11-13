@@ -890,7 +890,7 @@
           "tasks"
         ],
         "summary": "List Task Events",
-        "description": "Последние события фоновых задач, новые первыми.\n\nЖурнал общий для всех пользователей и хранит только номера проверок и\nпричины сбоев, поэтому читать его могут те же роли, что запускают проверки.",
+        "description": "Снимок: последние события фоновых задач, новые первыми.\n\nЖурнал общий для всех пользователей и хранит только номера проверок и\nпричины сбоев, поэтому читать его могут те же роли, что запускают проверки.",
         "operationId": "list_task_events",
         "security": [
           {
@@ -922,6 +922,81 @@
                     "$ref": "#/components/schemas/TaskEventRead"
                   },
                   "title": "Response List Task Events"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/tasks/stream": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Stream Task Events",
+        "description": "События фоновых задач в реальном времени (SSE).\n\nБез заголовка `Last-Event-ID` сначала приходит снимок последних событий, потом\nживые. С заголовком поток продолжается после этого номера. Через\n`MAX_STREAM_SECONDS` сервер закрывает поток, клиент переподключается.\n\nОбработчик возвращает ответ сразу, а зависимости со `scope=\"function\"` (сессия\nбазы при проверке токена) закрываются до начала потока: соединение с базой не\nвисит все минуты, пока открыт поток.",
+        "operationId": "stream_task_events",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "last-event-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Поток Server-Sent Events: событие `task` с JSON `TaskEventRead` в `data` и номером записи в `id`.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }

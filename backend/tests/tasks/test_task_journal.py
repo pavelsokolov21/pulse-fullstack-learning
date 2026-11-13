@@ -10,6 +10,7 @@ from celery import Celery
 import pulse.tasks.notifications as task_module
 from pulse.domain.notifications import (
     DeliveryOutcome,
+    JournalEntry,
     PermanentDeliveryError,
     RetryableDeliveryError,
     TaskEvent,
@@ -189,7 +190,8 @@ async def test_real_journal_write_reaches_redis(
         REAL_JOURNAL, 9, TaskState.RETRY, 2, detail="503", retry_in=1.5
     )
 
-    (stored,) = await RedisTaskJournal(redis_client).recent(10)
+    (entry,) = await RedisTaskJournal(redis_client).latest(10)
+    stored = entry.event
     assert (stored.check_id, stored.state, stored.attempt) == (9, TaskState.RETRY, 2)
     assert (stored.detail, stored.retry_in) == ("503", 1.5)
 
@@ -204,8 +206,11 @@ class MemoryJournal:
     async def record(self, event: TaskEvent) -> None:
         self.events.append(event)
 
-    async def recent(self, limit: int) -> list[TaskEvent]:
-        return self.events[:limit]
+    async def latest(self, limit: int) -> list[JournalEntry]:
+        return [JournalEntry(str(n), e) for n, e in enumerate(self.events[:limit])]
+
+    async def after(self, entry_id: str, block_ms: int) -> list[JournalEntry]:
+        return []
 
 
 class App:

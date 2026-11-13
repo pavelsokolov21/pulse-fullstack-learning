@@ -51,6 +51,18 @@ class TaskEvent:
     retry_in: float | None = None
 
 
+@dataclass(frozen=True)
+class JournalEntry:
+    """Событие с его номером в журнале. Номера растут: по ним продолжают чтение."""
+
+    id: str
+    event: TaskEvent
+
+
+class JournalUnavailableError(Exception):
+    """Журнал задач недоступен (Redis лёг). Чтение можно повторить позже."""
+
+
 class RetryableDeliveryError(Exception):
     """Доставка не удалась по причине, которая может пройти: повтор имеет смысл.
 

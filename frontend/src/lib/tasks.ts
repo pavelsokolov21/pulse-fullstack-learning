@@ -4,6 +4,27 @@ import { parseApiTime } from "@/lib/format";
 export type TaskEvent = components["schemas"]["TaskEventRead"];
 export type TaskState = TaskEvent["state"];
 
+/** Событие с номером записи в журнале сервера (`id` из SSE). */
+export type TaskEntry = { id: string; event: TaskEvent };
+
+/** Сколько событий держим в памяти страницы; столько же хранит и сервер. */
+export const MAX_ENTRIES = 300;
+
+/**
+ * Добавляет событие в конец списка (от старых к новым). Повтор того же номера
+ * пропускаем: после переподключения или двойного запуска эффекта в dev-режиме React
+ * сервер может прислать то, что страница уже видела. Лишнее с начала отбрасываем.
+ */
+export function appendEntry(
+  entries: TaskEntry[],
+  entry: TaskEntry,
+  max: number = MAX_ENTRIES,
+): TaskEntry[] {
+  if (entries.some((e) => e.id === entry.id)) return entries;
+  const next = [...entries, entry];
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
 /** Где задача находится сейчас. Определяется последним событием дорожки. */
 export type LaneStatus = "queued" | "running" | "waiting" | "done" | "failed";
 

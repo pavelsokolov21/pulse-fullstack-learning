@@ -185,12 +185,40 @@ export interface paths {
         };
         /**
          * List Task Events
-         * @description Последние события фоновых задач, новые первыми.
+         * @description Снимок: последние события фоновых задач, новые первыми.
          *
          *     Журнал общий для всех пользователей и хранит только номера проверок и
          *     причины сбоев, поэтому читать его могут те же роли, что запускают проверки.
          */
         get: operations["list_task_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Task Events
+         * @description События фоновых задач в реальном времени (SSE).
+         *
+         *     Без заголовка `Last-Event-ID` сначала приходит снимок последних событий, потом
+         *     живые. С заголовком поток продолжается после этого номера. Через
+         *     `MAX_STREAM_SECONDS` сервер закрывает поток, клиент переподключается.
+         *
+         *     Обработчик возвращает ответ сразу, а зависимости со `scope="function"` (сессия
+         *     базы при проверке токена) закрываются до начала потока: соединение с базой не
+         *     висит все минуты, пока открыт поток.
+         */
+        get: operations["stream_task_events"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1218,6 +1246,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskEventRead"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+        };
+    };
+    stream_task_events: {
+        parameters: {
+            query?: never;
+            header?: {
+                "last-event-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Поток Server-Sent Events: событие `task` с JSON `TaskEventRead` в `data` и номером записи в `id`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
                 };
             };
             /** @description Unauthorized */

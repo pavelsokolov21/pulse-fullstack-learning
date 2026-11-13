@@ -3,7 +3,7 @@ from datetime import timedelta
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from fastapi.security import OAuth2PasswordBearer
 
 from pulse.api.settings import ApiSettings
@@ -179,6 +179,9 @@ def get_task_journal(request: Request) -> TaskJournal:
 
 
 TaskJournalDep = Annotated[TaskJournal, Depends(get_task_journal)]
+
+# Браузер сам шлёт этот заголовок при переподключении; наш клиент делает то же.
+LastEventIdHeader = Annotated[str | None, Header()]
 
 
 async def get_report_service(

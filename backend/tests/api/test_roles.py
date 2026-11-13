@@ -82,6 +82,7 @@ WRITE_OPERATIONS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("POST", "/monitors/1/checks", None),
     # Журнал задач общий для всех: наблюдателю он закрыт.
     ("GET", "/tasks/events", None),
+    ("GET", "/tasks/stream", None),
 ]
 READ_OPERATIONS: list[tuple[str, str]] = [
     ("GET", "/monitors"),

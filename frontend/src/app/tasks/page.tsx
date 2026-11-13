@@ -4,12 +4,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { api, auth } from "@/api/client";
+import { api, auth, sessionStore } from "@/api/client";
 import type { components } from "@/api/schema";
+import { API_BASE_URL } from "@/lib/config";
+import { connectTaskStream, type StreamStatus } from "@/lib/task-stream";
 import {
   MAX_ATTEMPTS,
   STATUS_LABEL,
   STATUS_TONE,
+  appendEntry,
   buildLanes,
   describeEvent,
   formatSeconds,
@@ -17,31 +20,31 @@ import {
   retryProgress,
   retryRemaining,
   type Lane,
-  type TaskEvent,
+  type TaskEntry,
 } from "@/lib/tasks";
 import { useSession } from "@/lib/use-session";
 
 type Check = components["schemas"]["CheckRead"];
 type MonitorItem = components["schemas"]["MonitorPage"]["items"][number];
 
-const POLL_MS = 1000;
-const EVENTS_LIMIT = 200;
 const LANES_SHOWN = 12;
 
-type Feed =
-  | { status: "loading" }
-  | { status: "ready"; events: TaskEvent[] }
-  | { status: "failed"; code: number };
-
 type RunResult =
-  | { status: "ok"; check: Check }
-  | { status: "failed"; message: string };
+  { status: "ok"; check: Check } | { status: "failed"; message: string };
 
-function feedError(code: number): string {
-  if (code === 403) return "Журнал задач доступен менеджеру и администратору";
-  if (code === 0) return "Нет связи с сервером";
-  return "Не удалось загрузить журнал задач";
-}
+const CONNECTION: Record<StreamStatus, { text: string; tone: string }> = {
+  connecting: { text: "подключаемся…", tone: "tone-neutral" },
+  open: { text: "на связи", tone: "tone-ok" },
+  reconnecting: {
+    text: "связь потеряна, переподключаемся…",
+    tone: "tone-warn",
+  },
+  forbidden: {
+    text: "журнал доступен менеджеру и администратору",
+    tone: "tone-bad",
+  },
+  "signed-out": { text: "сессия закончилась", tone: "tone-bad" },
+};
 
 /** Текущее время для обратного отсчёта: тикает, только пока `active`. */
 function useNow(active: boolean): Date {
@@ -57,14 +60,12 @@ function useNow(active: boolean): Date {
 export default function TasksPage() {
   const router = useRouter();
   const session = useSession();
-  const [feed, setFeed] = useState<Feed>({ status: "loading" });
+  const [entries, setEntries] = useState<TaskEntry[]>([]);
+  const [connection, setConnection] = useState<StreamStatus>("connecting");
   const [monitors, setMonitors] = useState<MonitorItem[]>([]);
   const [monitorId, setMonitorId] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
-  // Меняется после запуска проверки: цикл опроса начинается заново и сразу
-  // забирает новые события, а не ждёт очередной секунды.
-  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     void auth.restore();
@@ -94,53 +95,33 @@ export default function TasksPage() {
     };
   }, [authenticated]);
 
-  // Опрос раз в секунду. Следующий запрос планируется после ответа предыдущего, а не
-  // по таймеру: медленный ответ не наложится на следующий. Скрытая вкладка не опрашивает.
+  // Поток событий (SSE): сервер сам присылает каждое изменение задач, опрашивать
+  // его не нужно. Подключение держит и переподключает connectTaskStream; при
+  // размонтировании (и при двойном запуске эффекта в dev-режиме) оно закрывается.
   useEffect(() => {
     if (!authenticated) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function tick() {
-      let stop = false;
-      if (!document.hidden) {
-        try {
-          const { data, response } = await api.GET("/tasks/events", {
-            params: { query: { limit: EVENTS_LIMIT } },
-          });
-          if (cancelled) return;
-          if (data) setFeed({ status: "ready", events: data });
-          else {
-            setFeed({ status: "failed", code: response.status });
-            // Прав нет: повторять бессмысленно, пока человек не сменит роль.
-            stop = response.status === 403;
-          }
-        } catch {
-          if (cancelled) return;
-          setFeed({ status: "failed", code: 0 });
-        }
-      }
-      if (!cancelled && !stop) timer = setTimeout(() => void tick(), POLL_MS);
-    }
-
-    void tick();
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [authenticated, reload]);
+    return connectTaskStream({
+      url: `${API_BASE_URL}/tasks/stream`,
+      getToken: sessionStore.getAccessToken,
+      refresh: auth.refresh,
+      onEntry: (entry) => setEntries((prev) => appendEntry(prev, entry)),
+      onStatus: setConnection,
+    });
+  }, [authenticated]);
 
   async function runCheck() {
     if (monitorId === null) return;
     setRunning(true);
     setResult(null);
     try {
-      const { data, response } = await api.POST("/monitors/{monitor_id}/checks", {
-        params: { path: { monitor_id: monitorId } },
-      });
+      const { data, response } = await api.POST(
+        "/monitors/{monitor_id}/checks",
+        {
+          params: { path: { monitor_id: monitorId } },
+        },
+      );
       if (data) {
         setResult({ status: "ok", check: data });
-        setReload((n) => n + 1);
       } else {
         setResult({
           status: "failed",
@@ -165,7 +146,8 @@ export default function TasksPage() {
     );
   }
 
-  const lanes = feed.status === "ready" ? buildLanes(feed.events) : [];
+  // buildLanes ждёт события новыми первыми, а в состоянии они лежат от старых к новым.
+  const lanes = buildLanes([...entries].reverse().map((e) => e.event));
 
   return (
     <main className="wide">
@@ -179,7 +161,7 @@ export default function TasksPage() {
         Проверка не прошла: API кладёт в очередь Celery задачу «уведомить о
         сбое» и сразу отвечает. Воркер выполняет её отдельно; если вебхук
         отвечает ошибкой, повторяет с растущей паузой (до {MAX_ATTEMPTS} попыток
-        всего). Страница раз в секунду читает журнал событий.
+        всего). События приходят сами, по SSE: страница ничего не опрашивает.
       </p>
 
       <div className="controls">
@@ -209,13 +191,8 @@ export default function TasksPage() {
       </div>
       <RunSummary result={result} />
 
-      {feed.status === "loading" && <p className="muted">Загрузка…</p>}
-      {feed.status === "failed" && (
-        <p className="error" role="alert">
-          {feedError(feed.code)}
-        </p>
-      )}
-      {feed.status === "ready" && lanes.length === 0 && (
+      <ConnectionBadge status={connection} />
+      {connection === "open" && lanes.length === 0 && (
         <p className="muted">
           Задач пока не было. Запустите проверку монитора, который не отвечает
           (или отвечает 5xx): успешная проверка уведомления не создаёт.
@@ -233,6 +210,16 @@ export default function TasksPage() {
       )}
       <Legend />
     </main>
+  );
+}
+
+function ConnectionBadge({ status }: { status: StreamStatus }) {
+  const { text, tone } = CONNECTION[status];
+  return (
+    <p className="connection" role="status" aria-live="polite">
+      <span className={`dot ${tone} ${status === "open" ? "live" : ""}`} />
+      {text}
+    </p>
   );
 }
 

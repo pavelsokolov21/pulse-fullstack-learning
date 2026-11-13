@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appendEntry,
   buildLanes,
   describeEvent,
   offsetSeconds,
   retryProgress,
   retryRemaining,
+  type TaskEntry,
   type TaskEvent,
 } from "@/lib/tasks";
 
@@ -196,5 +198,40 @@ describe("describeEvent", () => {
 
   it("survives a retry without a delay", () => {
     expect(describeEvent(ev(1, "retry", 0)).label).toBe("повтор");
+  });
+});
+
+describe("appendEntry", () => {
+  const entry = (id: string): TaskEntry => ({
+    id,
+    event: ev(1, "queued", 0),
+  });
+
+  it("appends to the end, oldest first", () => {
+    const list = appendEntry(appendEntry([], entry("1-0")), entry("2-0"));
+
+    expect(list.map((e) => e.id)).toEqual(["1-0", "2-0"]);
+  });
+
+  it("skips an id that is already there and returns the same list", () => {
+    // После переподключения сервер может прислать уже виденное.
+    const list = [entry("1-0"), entry("2-0")];
+
+    expect(appendEntry(list, entry("1-0"))).toBe(list);
+  });
+
+  it("does not mutate the previous list", () => {
+    const list = [entry("1-0")];
+
+    appendEntry(list, entry("2-0"));
+
+    expect(list).toHaveLength(1);
+  });
+
+  it("drops the oldest entries beyond the limit", () => {
+    let list: TaskEntry[] = [];
+    for (let n = 1; n <= 5; n++) list = appendEntry(list, entry(`${n}-0`), 3);
+
+    expect(list.map((e) => e.id)).toEqual(["3-0", "4-0", "5-0"]);
   });
 });

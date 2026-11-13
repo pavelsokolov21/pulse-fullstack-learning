@@ -73,8 +73,11 @@ envfile = ".env.worker"
 
 # Секреты берутся из .env.dev (в .gitignore, шаблон в .env.example).
 # --no-proxy-headers: иначе клиент подменой X-Forwarded-For обходит лимит входа.
+# uvicorn, а не `fastapi dev`: нужен --timeout-graceful-shutdown. Поток SSE
+# (/tasks/stream) открыт минутами, и без лимита остановка и перезапуск при правке
+# кода ждали бы, пока его закроет клиент (до 5 минут).
 [tool.poe.tasks.dev]
-cmd = "fastapi dev --no-proxy-headers"
+cmd = "uvicorn pulse.api.main:app --reload --reload-dir src --no-proxy-headers --timeout-graceful-shutdown 3"
 envfile = ".env.dev"
 
 [tool.fastapi]

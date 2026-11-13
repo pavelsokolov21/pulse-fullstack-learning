@@ -5,9 +5,18 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import pulse.api.routers.tasks as tasks_router
 from pulse.api.deps import get_http_client
 
 PASSWORD = "correct horse battery"
+
+
+@pytest.fixture(autouse=True)
+def short_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Проверка «валидный токен пускает» дошла бы до настоящего потока SSE, а он
+    # держится минутами: закрываем его через долю секунды.
+    monkeypatch.setattr(tasks_router, "MAX_STREAM_SECONDS", 0.2)
+
 
 # (метод, путь, тело) всех ручек, которые обязаны быть закрыты авторизацией.
 PROTECTED: list[tuple[str, str, dict[str, Any] | None]] = [
@@ -21,6 +30,7 @@ PROTECTED: list[tuple[str, str, dict[str, Any] | None]] = [
     ("GET", "/monitors/1/report", None),
     ("GET", "/auth/me", None),
     ("GET", "/tasks/events", None),
+    ("GET", "/tasks/stream", None),
 ]
 IDS = [f"{method} {path}" for method, path, _ in PROTECTED]
 
